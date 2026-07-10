@@ -1,20 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-function normalizeSupabaseUrl(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const dashboardProject = raw.match(/supabase\.com\/dashboard\/project\/([^/?#]+)/i);
-  if (dashboardProject?.[1]) return `https://${dashboardProject[1]}.supabase.co`;
-  try {
-    const url = new URL(raw);
-    if (url.hostname.endsWith(".supabase.co")) return url.origin;
-  } catch (_error) {
-    return raw;
-  }
-  return raw;
-}
-
-const supabaseUrl = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
@@ -340,24 +326,6 @@ async function requireOk(result) {
   return result.data;
 }
 
-async function readApiResponse(response) {
-  const text = await response.text();
-  if (!text) {
-    return {
-      error: response.ok
-        ? "Réponse vide du serveur."
-        : `Réponse vide du serveur Vercel (${response.status}). Vérifiez que la fonction /api/invite-user est déployée.`
-    };
-  }
-  try {
-    return JSON.parse(text);
-  } catch (_error) {
-    return {
-      error: `Réponse serveur non JSON (${response.status}). Vérifiez le déploiement de /api/invite-user dans Vercel.`
-    };
-  }
-}
-
 async function init() {
   if (!supabase) {
     $("#authMessage").textContent = "Configuration Supabase manquante. Vérifiez les variables Vercel.";
@@ -394,19 +362,7 @@ async function loadApp() {
 }
 
 async function loadData() {
-  const { data: profileRows, error: profileError } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", app.session.user.id)
-    .limit(2);
-  if (profileError) throw profileError;
-  if (!profileRows?.length) {
-    throw new Error("Profil introuvable dans Supabase. Vérifiez que votre compte Auth existe aussi dans public.profiles avec le rôle principal_admin.");
-  }
-  if (profileRows.length > 1) {
-    throw new Error("Plusieurs profils existent pour ce compte. Vérifiez la table public.profiles.");
-  }
-  const profile = profileRows[0];
+  const profile = await requireOk(await supabase.from("profiles").select("*").eq("id", app.session.user.id).single());
   if (!profile.active) throw new Error("Ce compte est désactivé.");
   app.profile = profile;
 
@@ -1142,7 +1098,7 @@ document.addEventListener("submit", async (event) => {
         },
         body: JSON.stringify(data)
       });
-      const payload = await readApiResponse(response);
+      const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Création impossible.");
       await refresh();
     }

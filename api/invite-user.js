@@ -42,13 +42,25 @@ export default async function handler(req, res) {
       return send(res, 401, { error: callerError?.message || "Session invalide." });
     }
 
-    const { data: callerProfile, error: profileError } = await admin
+    const { data: callerProfiles, error: profileError } = await admin
       .from("profiles")
       .select("role, active")
       .eq("id", callerData.user.id)
-      .single();
-    if (profileError || !callerProfile?.active) {
-      return send(res, 403, { error: profileError?.message || "Profil administrateur introuvable." });
+      .limit(2);
+    if (profileError) {
+      return send(res, 403, { error: `Lecture du profil impossible: ${profileError.message}` });
+    }
+    if (!callerProfiles?.length) {
+      return send(res, 403, {
+        error: "Profil administrateur introuvable. Vérifiez que SUPABASE_SERVICE_ROLE_KEY est la vraie clé service_role et que votre compte existe dans public.profiles."
+      });
+    }
+    if (callerProfiles.length > 1) {
+      return send(res, 403, { error: "Plusieurs profils trouvés pour ce compte. Vérifiez la table public.profiles." });
+    }
+    const callerProfile = callerProfiles[0];
+    if (!callerProfile.active) {
+      return send(res, 403, { error: "Votre profil administrateur est désactivé." });
     }
 
     const callerIsAdmin = ["principal_admin", "admin"].includes(callerProfile.role);
