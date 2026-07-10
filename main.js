@@ -1,6 +1,20 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+function normalizeSupabaseUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const dashboardProject = raw.match(/supabase\.com\/dashboard\/project\/([^/?#]+)/i);
+  if (dashboardProject?.[1]) return `https://${dashboardProject[1]}.supabase.co`;
+  try {
+    const url = new URL(raw);
+    if (url.hostname.endsWith(".supabase.co")) return url.origin;
+  } catch (_error) {
+    return raw;
+  }
+  return raw;
+}
+
+const supabaseUrl = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
@@ -324,6 +338,24 @@ function auditResult(record) {
 async function requireOk(result) {
   if (result.error) throw result.error;
   return result.data;
+}
+
+async function readApiResponse(response) {
+  const text = await response.text();
+  if (!text) {
+    return {
+      error: response.ok
+        ? "Réponse vide du serveur."
+        : `Réponse vide du serveur Vercel (${response.status}). Vérifiez que la fonction /api/invite-user est déployée.`
+    };
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    return {
+      error: `Réponse serveur non JSON (${response.status}). Vérifiez le déploiement de /api/invite-user dans Vercel.`
+    };
+  }
 }
 
 async function init() {
@@ -1098,7 +1130,7 @@ document.addEventListener("submit", async (event) => {
         },
         body: JSON.stringify(data)
       });
-      const payload = await response.json();
+      const payload = await readApiResponse(response);
       if (!response.ok) throw new Error(payload.error || "Création impossible.");
       await refresh();
     }
