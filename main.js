@@ -62,6 +62,7 @@ let app = {
   initialStocks: [],
   globalFactoryInitial: [],
   objectives: [],
+  productObjectives: [],
   purchases: [],
   returns: [],
   audits: [],
@@ -413,6 +414,38 @@ function objective(locationId) {
   return app.objectives.find((row) => row.location_id === locationId && row.month === app.month) || { qty: 0, value: 0 };
 }
 
+function productObjective(locationId, productId) {
+  return app.productObjectives.find((row) => row.location_id === locationId && row.product_id === productId && row.month === app.month) || { qty: 0 };
+}
+
+function productObjectiveQty(locationId, productId) {
+  return n(productObjective(locationId, productId).qty);
+}
+
+function purchaseQtyByProduct(locationId, productId, month = app.month) {
+  return app.purchases.reduce((sum, row) => {
+    if (row.location_id !== locationId || row.product_id !== productId || !inMonth(row.date, month)) return sum;
+    return sum + n(row.quantity);
+  }, 0);
+}
+
+function productObjectiveTotal(ids, productId) {
+  return ids.reduce((sum, id) => sum + productObjectiveQty(id, productId), 0);
+}
+
+function productPurchaseTotal(ids, productId) {
+  return ids.reduce((sum, id) => sum + purchaseQtyByProduct(id, productId), 0);
+}
+
+function globalObjectiveTotals(ids = selectedLocationIds()) {
+  return ids.reduce((acc, id) => {
+    const obj = objective(id);
+    acc.qty += n(obj.qty);
+    acc.value += n(obj.value);
+    return acc;
+  }, { qty: 0, value: 0 });
+}
+
 function auditResult(record) {
   const fundsExpected = n(record.cash_initial) + n(record.sales_value) - n(record.rebates_value);
   const fundsControlled = n(record.cash_final) + n(record.bank_deposit) + n(record.salary) + n(record.expenses);
@@ -508,6 +541,7 @@ async function loadData() {
     initialStocks,
     globalFactoryInitial,
     objectives,
+    productObjectives,
     purchases,
     returnsRows,
     audits,
@@ -525,6 +559,7 @@ async function loadData() {
     requireOk(await supabase.from("initial_stocks").select("*")),
     isAdmin() ? requireOk(await supabase.from("global_factory_initial").select("*")) : [],
     requireOk(await supabase.from("objectives").select("*")),
+    requireOk(await supabase.from("product_objectives").select("*")),
     requireOk(await supabase.from("purchases").select("*").order("date", { ascending: false })),
     requireOk(await supabase.from("packaging_returns").select("*").order("date", { ascending: false })),
     requireOk(await supabase.from("audits").select("*")),
@@ -535,7 +570,7 @@ async function loadData() {
     isAdmin() ? requireOk(await supabase.from("profiles").select("*").order("created_at", { ascending: false })) : []
   ]);
 
-  Object.assign(app, { locations, bremers, products, productPrices, settings, initialStocks, globalFactoryInitial, objectives, purchases, returns: returnsRows, audits, financeDeposits, financeLoans, capitalEntries, capitalSettings, profiles });
+  Object.assign(app, { locations, bremers, products, productPrices, settings, initialStocks, globalFactoryInitial, objectives, productObjectives, purchases, returns: returnsRows, audits, financeDeposits, financeLoans, capitalEntries, capitalSettings, profiles });
   if (!isAdmin()) app.locationFilter = app.profile.location_id || "";
   if (isAdmin() && app.locationFilter !== "all" && !allowedLocationIds().includes(app.locationFilter)) app.locationFilter = "all";
 }
@@ -769,11 +804,115 @@ function renderPurchases() {
   const ids = selectedLocationIds();
   const rows = app.purchases.filter((row) => ids.includes(row.location_id) && inMonth(row.date));
   return `
+    ${renderPurchaseObjectives(ids)}
     ${isAdmin() ? purchaseForm() : `<div class="readonly">Lecture seule: vous consultez uniquement les achats de votre site affecté.</div>`}
     <section class="panel">
       <div class="panel-header"><div><h2>Achats produits</h2><p>Les achats diminuent le solde Brasimba et augmentent le stock dépôt.</p></div></div>
       <div class="table-wrap">${purchaseTable(rows)}</div>
     </section>
+  `;
+}
+
+function currentObjectiveProductId() {
+  const stored = sessionStorage.getItem("objectiveProductId");
+  return app.products.some((row) => row.id === stored) ? stored : app.products[0]?.id;
+}
+
+function renderPurchaseObjectives(ids) {
+  const globalTarget = globalObjectiveTotals(ids);
+  const globalDone = purchaseSummary(ids);
+  const selectedProductId = currentObjectiveProductId();
+  const selectedProduct = product(selectedProductId);
+  const selectedProductTarget = productObjectiveTotal(ids, selectedProductId);
+  const selectedProductDone = productPurchaseTotal(ids, selectedProductId);
+  const globalPct = globalTarget.qty ? Math.min(100, globalDone.qty / globalTarget.qty * 100) : 0;
+  const productPct = selectedProductTarget ? Math.min(100, selectedProductDone / selectedProductTarget * 100) : 0;
+  const globalLabel = isAdmin() && app.locationFilter === "all" ? "Objectif global Rivinter" : "Objectif sélection";
+  const globalDetail = isAdmin() && app.locationFilter === "all" ? "Somme des objectifs quantités par site" : "Selon le site ou filtre choisi";
+  return `
+    <div class="cards">
+      ${card(globalLabel, fmtQty(globalTarget.qty), globalDetail)}
+      ${card("Réalisé global", fmtQty(globalDone.qty), `${globalPct.toFixed(1)}% de l'objectif global`)}
+      ${card(`Objectif ${selectedProduct?.name || "produit"}`, fmtQty(selectedProductTarget), "Somme des objectifs du produit")}
+      ${card("Réalisé produit", fmtQty(selectedProductDone), `${productPct.toFixed(1)}% du produit sélectionné`)}
+    </div>
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>Objectifs achats</h2><p>Quantité globale par site et qualité par produit. Le total Rivinter est calculé automatiquement par somme des sites.</p></div>
+        <label>Produit suivi
+          <select id="objectiveProductId">
+            ${app.products.map((row) => `<option value="${row.id}" ${row.id === selectedProductId ? "selected" : ""}>${h(row.name)} / ${h(bremer(row.bremer_id)?.code)}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+      ${isAdmin() ? `<div class="readonly">Saisie administrateur: renseignez les objectifs par site. Les utilisateurs voient seulement la progression.</div>` : ""}
+      <div class="split">
+        <div class="table-wrap">${globalObjectiveEditTable(ids)}</div>
+        <div class="table-wrap">${productObjectiveEditTable(ids, selectedProductId)}</div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><div><h2>Résumé objectifs par produit</h2><p>Objectifs qualité et réalisations du mois ${h(app.month)}.</p></div></div>
+      <div class="table-wrap">${productObjectiveSummaryTable(ids)}</div>
+    </section>
+  `;
+}
+
+function globalObjectiveEditTable(ids) {
+  return `
+    <table>
+      <thead><tr><th>Site / axe</th><th class="num">Objectif global Qté</th><th class="num">Réalisé Qté</th><th>Progression</th></tr></thead>
+      <tbody>
+        ${app.locations.filter((row) => ids.includes(row.id)).map((row) => {
+          const obj = objective(row.id);
+          const done = purchaseSummary([row.id]);
+          const pct = n(obj.qty) ? Math.min(100, done.qty / n(obj.qty) * 100) : 0;
+          return `<tr>
+            <td>${h(row.name)}</td>
+            <td><input class="objective-input" data-location="${row.id}" data-field="qty" value="${h(obj.qty)}" ${isAdmin() ? "" : "disabled"}></td>
+            <td class="num">${fmtQty(done.qty)}</td>
+            <td><div class="progress"><span style="width:${pct}%"></span></div></td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function productObjectiveEditTable(ids, productId) {
+  return `
+    <table>
+      <thead><tr><th>Site / axe</th><th class="num">Objectif produit</th><th class="num">Réalisé produit</th><th>Progression</th></tr></thead>
+      <tbody>
+        ${app.locations.filter((row) => ids.includes(row.id)).map((row) => {
+          const target = productObjectiveQty(row.id, productId);
+          const done = purchaseQtyByProduct(row.id, productId);
+          const pct = target ? Math.min(100, done / target * 100) : 0;
+          return `<tr>
+            <td>${h(row.name)}</td>
+            <td><input class="product-objective-input" data-location="${row.id}" data-product="${h(productId)}" value="${h(target)}" ${isAdmin() ? "" : "disabled"}></td>
+            <td class="num">${fmtQty(done)}</td>
+            <td><div class="progress"><span style="width:${pct}%"></span></div></td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function productObjectiveSummaryTable(ids) {
+  return `
+    <table>
+      <thead><tr><th>Produit</th><th>Bremer</th><th class="num">Objectif Rivinter</th><th class="num">Réalisé</th><th>Progression</th></tr></thead>
+      <tbody>
+        ${app.products.map((row) => {
+          const target = productObjectiveTotal(ids, row.id);
+          const done = productPurchaseTotal(ids, row.id);
+          const pct = target ? Math.min(100, done / target * 100) : 0;
+          return `<tr><td>${h(row.name)}</td><td>${h(bremer(row.bremer_id)?.code)}</td><td class="num">${fmtQty(target)}</td><td class="num">${fmtQty(done)}</td><td><div class="progress"><span style="width:${pct}%"></span></div></td></tr>`;
+        }).join("")}
+      </tbody>
+    </table>
   `;
 }
 
@@ -1550,6 +1689,10 @@ document.addEventListener("change", async (event) => {
     sessionStorage.setItem("auditLocationId", event.target.value);
     render();
   }
+  if (event.target.id === "objectiveProductId") {
+    sessionStorage.setItem("objectiveProductId", event.target.value);
+    render();
+  }
   if (event.target.closest("#purchaseForm") || event.target.closest("#consignmentForm") || event.target.closest("#financeDepositForm")) {
     syncDynamicForms();
   }
@@ -1606,6 +1749,26 @@ document.addEventListener("input", async (event) => {
       qty: n(current.qty),
       value: n(current.value)
     }, { onConflict: "month,location_id" });
+  }
+
+  const productObjectiveInput = event.target.closest(".product-objective-input");
+  if (productObjectiveInput && isAdmin()) {
+    let current = app.productObjectives.find((row) =>
+      row.location_id === productObjectiveInput.dataset.location
+      && row.product_id === productObjectiveInput.dataset.product
+      && row.month === app.month
+    );
+    if (!current) {
+      current = { month: app.month, location_id: productObjectiveInput.dataset.location, product_id: productObjectiveInput.dataset.product, qty: 0 };
+      app.productObjectives.push(current);
+    }
+    current.qty = n(productObjectiveInput.value);
+    await supabase.from("product_objectives").upsert({
+      month: app.month,
+      location_id: productObjectiveInput.dataset.location,
+      product_id: productObjectiveInput.dataset.product,
+      qty: n(current.qty)
+    }, { onConflict: "month,location_id,product_id" });
   }
 
   if (event.target.closest("#purchaseForm") || event.target.closest("#consignmentForm")) {

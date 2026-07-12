@@ -9,6 +9,7 @@ Application web prete pour GitHub + Vercel, avec base de donnees et authentifica
 - Stock initial depot et usine Brasimba en constante Q/V
 - Achats produits Brasimba
 - Achats produits multi-lignes par commande
+- Objectifs achats par quantite globale de site et par qualite/produit
 - Retours / deconsignations emballages multi-lignes
 - Consignation emballages reliee aux bordereaux finance
 - Audit mensuel saisissable par les utilisateurs affectes

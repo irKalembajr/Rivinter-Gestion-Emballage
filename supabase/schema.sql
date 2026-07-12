@@ -88,6 +88,15 @@ create table if not exists public.objectives (
   primary key (month, location_id)
 );
 
+create table if not exists public.product_objectives (
+  month text not null,
+  location_id text not null references public.locations(id) on delete cascade,
+  product_id text not null references public.products(id) on delete cascade,
+  qty numeric not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (month, location_id, product_id)
+);
+
 create table if not exists public.purchases (
   id uuid primary key default gen_random_uuid(),
   date date not null,
@@ -249,6 +258,10 @@ for each row execute function public.touch_updated_at();
 
 drop trigger if exists objectives_touch_updated_at on public.objectives;
 create trigger objectives_touch_updated_at before update on public.objectives
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists product_objectives_touch_updated_at on public.product_objectives;
+create trigger product_objectives_touch_updated_at before update on public.product_objectives
 for each row execute function public.touch_updated_at();
 
 drop trigger if exists audits_touch_updated_at on public.audits;
@@ -552,6 +565,7 @@ begin
   delete from public.audits;
   delete from public.packaging_returns;
   delete from public.purchases;
+  delete from public.product_objectives;
   delete from public.objectives;
   delete from public.finance_loans;
   delete from public.finance_deposits;
@@ -600,6 +614,7 @@ alter table public.app_settings enable row level security;
 alter table public.initial_stocks enable row level security;
 alter table public.global_factory_initial enable row level security;
 alter table public.objectives enable row level security;
+alter table public.product_objectives enable row level security;
 alter table public.purchases enable row level security;
 alter table public.packaging_returns enable row level security;
 alter table public.audits enable row level security;
@@ -663,6 +678,13 @@ create policy objectives_select on public.objectives for select to authenticated
 using (public.can_read_location(location_id));
 drop policy if exists objectives_write_admin on public.objectives;
 create policy objectives_write_admin on public.objectives for all to authenticated
+using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists product_objectives_select on public.product_objectives;
+create policy product_objectives_select on public.product_objectives for select to authenticated
+using (public.can_read_location(location_id));
+drop policy if exists product_objectives_write_admin on public.product_objectives;
+create policy product_objectives_write_admin on public.product_objectives for all to authenticated
 using (public.is_app_admin()) with check (public.is_app_admin());
 
 drop policy if exists purchases_select on public.purchases;
