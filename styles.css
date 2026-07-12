@@ -249,7 +249,7 @@ td.num, th.num { text-align: right; }
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -315,6 +315,38 @@ td.num, th.num { text-align: right; }
 .form-grid.three { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
 .span-2 { grid-column: span 2; }
 .span-4 { grid-column: 1 / -1; }
+
+.line-editor {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: #fbfcfa;
+  display: grid;
+  gap: 10px;
+}
+
+.line-editor-head, .line-total, .form-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.line-list {
+  display: grid;
+  gap: 8px;
+}
+
+.line-row {
+  display: grid;
+  grid-template-columns: minmax(210px, 1.3fr) minmax(120px, .7fr) minmax(120px, .7fr) minmax(120px, .7fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.return-line, .consignment-line {
+  grid-template-columns: minmax(210px, 1.3fr) minmax(120px, .7fr) minmax(120px, .7fr) auto;
+}
 
 .toolbar {
   display: flex;
@@ -409,7 +441,7 @@ td.num, th.num { text-align: right; }
 
 @media (max-width: 720px) {
   .content { padding: 14px; }
-  .filters, .form-grid, .form-grid.two, .form-grid.three, .cards {
+  .filters, .form-grid, .form-grid.two, .form-grid.three, .cards, .line-row, .return-line, .consignment-line {
     grid-template-columns: 1fr;
   }
   .span-2, .span-4 { grid-column: auto; }

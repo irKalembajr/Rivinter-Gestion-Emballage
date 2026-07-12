@@ -34,6 +34,14 @@ create table if not exists public.products (
   price numeric not null default 0
 );
 
+create table if not exists public.product_prices (
+  product_id text not null references public.products(id) on delete cascade,
+  location_id text not null references public.locations(id) on delete cascade,
+  price numeric not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (product_id, location_id)
+);
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
@@ -101,10 +109,17 @@ create table if not exists public.packaging_returns (
   bremer_id text not null references public.bremers(id),
   quantity numeric not null default 0,
   shipped_qty numeric not null default 0,
+  movement_type text not null default 'return' check (movement_type in ('return', 'consignment')),
+  bank_deposit_id uuid,
+  amount numeric not null default 0,
   note text,
   created_by uuid references auth.users(id) default auth.uid(),
   created_at timestamptz not null default now()
 );
+
+alter table public.packaging_returns add column if not exists movement_type text not null default 'return';
+alter table public.packaging_returns add column if not exists bank_deposit_id uuid;
+alter table public.packaging_returns add column if not exists amount numeric not null default 0;
 
 create table if not exists public.audits (
   id uuid primary key default gen_random_uuid(),
@@ -133,6 +148,70 @@ create table if not exists public.audits (
   updated_at timestamptz not null default now(),
   unique (month, location_id)
 );
+
+alter table public.audits drop constraint if exists audits_month_location_id_key;
+alter table public.audits drop constraint if exists audits_month_location_id_created_by_key;
+alter table public.audits add constraint audits_month_location_id_created_by_key unique (month, location_id, created_by);
+
+create table if not exists public.finance_deposits (
+  id uuid primary key default gen_random_uuid(),
+  date date not null,
+  month text not null,
+  location_id text not null references public.locations(id),
+  bank_name text not null check (bank_name in ('Rawbank', 'TMB')),
+  account_name text not null,
+  purpose text not null default 'versement' check (purpose in ('versement', 'achat_direct', 'consignation', 'autre')),
+  amount numeric not null default 0,
+  bordereau_no text not null,
+  note text,
+  created_by uuid references auth.users(id) default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.finance_loans (
+  id uuid primary key default gen_random_uuid(),
+  date date not null,
+  month text not null,
+  lender_location_id text not null references public.locations(id),
+  borrower_location_id text not null references public.locations(id),
+  order_no text,
+  reason text not null default 'achat_produit',
+  amount numeric not null default 0,
+  paid_amount numeric not null default 0,
+  note text,
+  created_by uuid references auth.users(id) default auth.uid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.capital_entries (
+  month text not null,
+  location_id text not null references public.locations(id) on delete cascade,
+  product_value numeric not null default 0,
+  cash_value numeric not null default 0,
+  debt_value numeric not null default 0,
+  other_value numeric not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (month, location_id)
+);
+
+create table if not exists public.capital_settings (
+  month text primary key,
+  credit_limit numeric not null default 0,
+  current_credit_level numeric not null default 0,
+  credit_reduction numeric not null default 0,
+  rivinter_debt numeric not null default 0,
+  rebates_value numeric not null default 0,
+  free_value numeric not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.packaging_returns drop constraint if exists packaging_returns_movement_type_check;
+alter table public.packaging_returns add constraint packaging_returns_movement_type_check
+check (movement_type in ('return', 'consignment'));
+alter table public.packaging_returns drop constraint if exists packaging_returns_bank_deposit_id_fkey;
+alter table public.packaging_returns add constraint packaging_returns_bank_deposit_id_fkey
+foreign key (bank_deposit_id) references public.finance_deposits(id) on delete set null;
 
 create table if not exists public.app_events (
   id uuid primary key default gen_random_uuid(),
@@ -174,6 +253,22 @@ for each row execute function public.touch_updated_at();
 
 drop trigger if exists audits_touch_updated_at on public.audits;
 create trigger audits_touch_updated_at before update on public.audits
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists product_prices_touch_updated_at on public.product_prices;
+create trigger product_prices_touch_updated_at before update on public.product_prices
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists finance_loans_touch_updated_at on public.finance_loans;
+create trigger finance_loans_touch_updated_at before update on public.finance_loans
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists capital_entries_touch_updated_at on public.capital_entries;
+create trigger capital_entries_touch_updated_at before update on public.capital_entries
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists capital_settings_touch_updated_at on public.capital_settings;
+create trigger capital_settings_touch_updated_at before update on public.capital_settings
 for each row execute function public.touch_updated_at();
 
 create or replace function public.handle_new_user()
@@ -318,16 +413,17 @@ insert into public.products (id, name, bremer_id, price) values
 ('export65', '33 Export 65Cl', 'B65', 43000),
 ('doppel65', 'Doppel 65Cl', 'B65', 43000),
 ('doppel50', 'Doppel 50Cl', 'ALE50', 48500),
-('export50', '33 Export 50Cl', 'ALE50', 54200),
+('export50', '33 Export 50Cl', 'ALE50', 48500),
 ('castel50', 'Castel 50Cl', 'ALE50', 48500),
 ('peak55', 'Peak 55', 'ALE50', 48500),
-('tembo33', 'Tembo 33Cl', 'B33N', 48000),
+('tembo33', 'Tembo 33Cl', 'B33N', 47000),
 ('castel33', 'Castel 33Cl', 'B33N', 47000),
 ('peak77', 'Peak 77', 'B33N', 45000),
 ('booster', 'Booster', 'B33N', 45000),
 ('beaufort33', 'Beaufort', 'B33V', 63500),
 ('chill33', 'Chill', 'B33V', 46000),
-('djinos', 'Djinos', 'B30CL', 0),
+('djinos', 'Djinos', 'B30CL', 23000),
+('xxl', 'XXL', 'B30CL', 30000),
 ('djino-orange', 'Djino Orange', 'B30CL', 0),
 ('djino-grenadine', 'Djino Grenadine', 'B30CL', 0),
 ('djino-soda', 'Djino Soda', 'B30CL', 0),
@@ -335,6 +431,34 @@ insert into public.products (id, name, bremer_id, price) values
 ('djino-youzou', 'Djino Youzou', 'B30CL', 0),
 ('djino-tonic', 'Djino Tonic', 'B30CL', 0)
 on conflict (id) do update set name = excluded.name, bremer_id = excluded.bremer_id, price = excluded.price;
+
+insert into public.product_prices (product_id, location_id, price) values
+('simba65', 'mambasa', 47000),
+('tembo65', 'mambasa', 51000),
+('export65', 'mambasa', 47000),
+('doppel65', 'mambasa', 47000),
+('doppel50', 'mambasa', 53000),
+('export50', 'mambasa', 53000),
+('castel50', 'mambasa', 59000),
+('peak55', 'mambasa', 53000),
+('tembo33', 'mambasa', 52000),
+('castel33', 'mambasa', 52000),
+('peak77', 'mambasa', 50000),
+('booster', 'mambasa', 49500),
+('beaufort33', 'mambasa', 67000),
+('chill33', 'mambasa', 50000),
+('djinos', 'mambasa', 25500),
+('xxl', 'mambasa', 32500)
+on conflict (product_id, location_id) do update set price = excluded.price;
+
+update public.purchases p
+set unit_price = coalesce(
+  (select pp.price from public.product_prices pp where pp.product_id = pr.id and pp.location_id = p.location_id),
+  pr.price
+)
+from public.products pr
+where p.product_id = pr.id
+  and pr.id in ('tembo33', 'export50', 'djinos', 'xxl');
 
 create or replace function public.seed_initial_stocks()
 returns void
@@ -385,6 +509,35 @@ $$;
 
 select public.seed_initial_stocks();
 
+insert into public.capital_entries (month, location_id, product_value, cash_value, debt_value, other_value) values
+('2026-07', 'beni', 226367000, 13292000, 0, 0),
+('2026-07', 'pasisi', 119569800, 23472300, 0, 0),
+('2026-07', 'oicha', 116179700, 43953500, 0, 0),
+('2026-07', 'eringeti', 4408500, 1039500, 0, 0),
+('2026-07', 'komanda', 1130000, 92275500, 0, 0),
+('2026-07', 'mambasa', 294034000, 41064500, 0, 0),
+('2026-07', 'kasindi', 57050700, 8203000, 0, 0)
+on conflict (month, location_id) do nothing;
+
+insert into public.capital_settings (
+  month,
+  credit_limit,
+  current_credit_level,
+  credit_reduction,
+  rivinter_debt,
+  rebates_value,
+  free_value
+) values (
+  '2026-07',
+  1365000000,
+  1526977818,
+  91000000,
+  280814500,
+  147829345,
+  0
+)
+on conflict (month) do nothing;
+
 create or replace function public.reset_company_data(p_restore_seed boolean default true)
 returns void
 language plpgsql
@@ -400,6 +553,9 @@ begin
   delete from public.packaging_returns;
   delete from public.purchases;
   delete from public.objectives;
+  delete from public.finance_loans;
+  delete from public.finance_deposits;
+  delete from public.capital_entries;
 
   if p_restore_seed then
     delete from public.initial_stocks;
@@ -438,6 +594,7 @@ $$;
 alter table public.locations enable row level security;
 alter table public.bremers enable row level security;
 alter table public.products enable row level security;
+alter table public.product_prices enable row level security;
 alter table public.profiles enable row level security;
 alter table public.app_settings enable row level security;
 alter table public.initial_stocks enable row level security;
@@ -446,6 +603,10 @@ alter table public.objectives enable row level security;
 alter table public.purchases enable row level security;
 alter table public.packaging_returns enable row level security;
 alter table public.audits enable row level security;
+alter table public.finance_deposits enable row level security;
+alter table public.finance_loans enable row level security;
+alter table public.capital_entries enable row level security;
+alter table public.capital_settings enable row level security;
 alter table public.app_events enable row level security;
 
 drop policy if exists locations_select on public.locations;
@@ -462,6 +623,11 @@ drop policy if exists products_select on public.products;
 create policy products_select on public.products for select to authenticated using (true);
 drop policy if exists products_write_admin on public.products;
 create policy products_write_admin on public.products for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists product_prices_select on public.product_prices;
+create policy product_prices_select on public.product_prices for select to authenticated using (true);
+drop policy if exists product_prices_write_admin on public.product_prices;
+create policy product_prices_write_admin on public.product_prices for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
 
 drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles for select to authenticated
@@ -515,10 +681,32 @@ using (public.is_app_admin()) with check (public.is_app_admin());
 
 drop policy if exists audits_select on public.audits;
 create policy audits_select on public.audits for select to authenticated
-using (public.can_read_location(location_id));
+using (public.is_app_admin() or created_by = auth.uid());
 drop policy if exists audits_write_admin on public.audits;
-create policy audits_write_admin on public.audits for all to authenticated
-using (public.is_app_admin()) with check (public.is_app_admin());
+drop policy if exists audits_write_allowed on public.audits;
+create policy audits_write_allowed on public.audits for all to authenticated
+using (public.is_app_admin() or (created_by = auth.uid() and public.can_read_location(location_id)))
+with check (public.is_app_admin() or (created_by = auth.uid() and public.can_read_location(location_id)));
+
+drop policy if exists finance_deposits_select on public.finance_deposits;
+create policy finance_deposits_select on public.finance_deposits for select to authenticated using (true);
+drop policy if exists finance_deposits_write_admin on public.finance_deposits;
+create policy finance_deposits_write_admin on public.finance_deposits for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists finance_loans_select on public.finance_loans;
+create policy finance_loans_select on public.finance_loans for select to authenticated using (true);
+drop policy if exists finance_loans_write_admin on public.finance_loans;
+create policy finance_loans_write_admin on public.finance_loans for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists capital_entries_select on public.capital_entries;
+create policy capital_entries_select on public.capital_entries for select to authenticated using (true);
+drop policy if exists capital_entries_write_admin on public.capital_entries;
+create policy capital_entries_write_admin on public.capital_entries for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists capital_settings_select on public.capital_settings;
+create policy capital_settings_select on public.capital_settings for select to authenticated using (true);
+drop policy if exists capital_settings_write_admin on public.capital_settings;
+create policy capital_settings_write_admin on public.capital_settings for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
 
 drop policy if exists app_events_select_principal on public.app_events;
 create policy app_events_select_principal on public.app_events for select to authenticated

@@ -8,8 +8,12 @@ Application web prete pour GitHub + Vercel, avec base de donnees et authentifica
 - Gestion des sites et axes
 - Stock initial depot et usine Brasimba en constante Q/V
 - Achats produits Brasimba
-- Retours / deconsignations emballages
-- Audit mensuel
+- Achats produits multi-lignes par commande
+- Retours / deconsignations emballages multi-lignes
+- Consignation emballages reliee aux bordereaux finance
+- Audit mensuel saisissable par les utilisateurs affectes
+- Suivi finance : versements, comptes bancaires, dettes et paiements
+- Suivi capital : valeur produits, caisse, dettes, plafond de credit et valeur nette
 - Reporting CSV et impression PDF
 - Gestion des comptes
 - Reinitialisation reservee uniquement au compte `principal_admin`
@@ -45,8 +49,10 @@ Application web prete pour GitHub + Vercel, avec base de donnees et authentifica
 ### Utilisateur simple
 
 - Consulte uniquement le site ou l'axe affecte
+- Peut encoder ses propres audits pour son site affecte
+- Consulte en lecture seule le suivi finance et le suivi capital
 - Telecharge les rapports disponibles pour son affectation
-- Ne modifie pas les donnees
+- Ne modifie pas les donnees administratives
 
 ## Logique des flux
 
@@ -95,6 +101,7 @@ Apres verrouillage, le stock initial reste immuable dans l'application. Une rein
 2. Ouvrez `SQL Editor`.
 3. Copiez tout le contenu de `supabase/schema.sql`.
 4. Executez le script.
+   Pour une mise a jour d'un projet existant, executez aussi ce meme script complet : il ajoute les nouvelles tables sans supprimer les donnees existantes.
 5. Dans Supabase, allez dans `Project Settings > API`.
 6. Notez :
    - Project URL
@@ -167,7 +174,10 @@ Elle est visible uniquement pour `principal_admin`. Elle supprime :
 
 - achats
 - retours emballages
+- consignations
 - audits
 - objectifs
+- suivi finance
+- saisies capital
 
 Puis elle remet les stocks initiaux de reference importes du classeur Excel et deverrouille la configuration initiale.
