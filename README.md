@@ -171,7 +171,7 @@ La reinitialisation se trouve dans :
 Gestion comptes > Reinitialisation principale
 ```
 
-Elle est visible uniquement pour `principal_admin`. Elle supprime :
+Elle est visible uniquement pour `principal_admin`. Elle supprime toutes les donnees saisies :
 
 - achats
 - retours emballages
@@ -180,5 +180,16 @@ Elle est visible uniquement pour `principal_admin`. Elle supprime :
 - objectifs
 - suivi finance
 - saisies capital
+- parametres capital
+- stocks initiaux depot et usine
+- historique des actions
 
-Puis elle remet les stocks initiaux de reference importes du classeur Excel et deverrouille la configuration initiale.
+Elle conserve uniquement les donnees de base indispensables :
+
+- comptes et roles
+- sites et axes
+- categories Bremers
+- produits
+- prix des produits
+
+Apres reinitialisation, la configuration du stock initial est deverrouillee et vide. L'administrateur principal peut donc encoder un nouveau stock initial propre.

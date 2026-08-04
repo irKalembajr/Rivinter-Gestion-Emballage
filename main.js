@@ -1502,8 +1502,8 @@ function renderAccounts() {
       <section class="panel danger-zone">
         <div class="panel-header"><div><h2>Réinitialisation principale</h2><p>Réservée uniquement à l'administrateur principal. Les administrateurs secondaires ne voient pas cette action.</p></div></div>
         <div class="panel-body toolbar">
-          <button id="resetAppBtn" class="danger" type="button">Réinitialiser données d'exploitation</button>
-          <span class="notice">Supprime achats, retours, audits et objectifs, puis remet les stocks initiaux de référence.</span>
+          <button id="resetAppBtn" class="danger" type="button">Réinitialiser toutes les saisies</button>
+          <span class="notice">Supprime achats, retours, consignations, audits, objectifs, finances, capital, stocks initiaux et historique. Les comptes, sites, produits et prix restent conservés.</span>
         </div>
       </section>
     ` : ""}
@@ -1657,9 +1657,9 @@ document.addEventListener("click", async (event) => {
   }
 
   if (event.target.id === "resetAppBtn" && isPrincipalAdmin()) {
-    const ok = confirm("Réinitialiser les données d'exploitation Rivinter ? Cette action est réservée à l'administrateur principal.");
+    const ok = confirm("Réinitialiser toutes les données saisies dans Rivinter ? Achats, retours, consignations, audits, objectifs, finances, capital, stocks initiaux et historique seront effacés. Les comptes, sites, produits et prix seront conservés.");
     if (!ok) return;
-    await requireOk(await supabase.rpc("reset_company_data", { p_restore_seed: true }));
+    await requireOk(await supabase.rpc("reset_company_data", { p_restore_seed: false }));
     await refresh();
     return;
   }
