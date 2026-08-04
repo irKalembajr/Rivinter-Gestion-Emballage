@@ -1585,6 +1585,32 @@ async function refresh() {
   render();
 }
 
+function resetRemainingRows() {
+  return [
+    ["achats", app.purchases.length],
+    ["retours/consignations", app.returns.length],
+    ["audits", app.audits.length],
+    ["objectifs globaux", app.objectives.length],
+    ["objectifs produits", app.productObjectives.length],
+    ["versements", app.financeDeposits.length],
+    ["dettes", app.financeLoans.length],
+    ["capital", app.capitalEntries.length],
+    ["paramètres capital", app.capitalSettings.length],
+    ["stocks initiaux", app.initialStocks.length + app.globalFactoryInitial.length]
+  ].filter((row) => row[1] > 0);
+}
+
+async function refreshAfterReset() {
+  await loadData();
+  render();
+  const remaining = resetRemainingRows();
+  if (remaining.length) {
+    alert(`Réinitialisation incomplète. Exécutez dans Supabase SQL Editor le fichier supabase/reset_fonction_et_nettoyage.sql. Données restantes: ${remaining.map((row) => `${row[0]}=${row[1]}`).join(", ")}`);
+  } else {
+    alert("Réinitialisation terminée. Toutes les saisies ont été effacées.");
+  }
+}
+
 document.addEventListener("click", async (event) => {
   const viewButton = event.target.closest("[data-view]");
   if (viewButton) {
@@ -1660,7 +1686,7 @@ document.addEventListener("click", async (event) => {
     const ok = confirm("Réinitialiser toutes les données saisies dans Rivinter ? Achats, retours, consignations, audits, objectifs, finances, capital, stocks initiaux et historique seront effacés. Les comptes, sites, produits et prix seront conservés.");
     if (!ok) return;
     await requireOk(await supabase.rpc("reset_company_data", { p_restore_seed: false }));
-    await refresh();
+    await refreshAfterReset();
     return;
   }
 

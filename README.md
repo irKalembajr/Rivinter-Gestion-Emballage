@@ -193,3 +193,24 @@ Elle conserve uniquement les donnees de base indispensables :
 - prix des produits
 
 Apres reinitialisation, la configuration du stock initial est deverrouillee et vide. L'administrateur principal peut donc encoder un nouveau stock initial propre.
+
+### Si le bouton ne vide pas encore la base
+
+Si le site affiche encore des stocks ou des anciennes donnees apres le clic sur reinitialisation, c'est que la fonction Supabase en ligne n'a pas encore ete remplacee.
+
+Dans Supabase :
+
+1. Ouvrez `SQL Editor`.
+2. Copiez tout le contenu du fichier :
+
+```text
+supabase/reset_fonction_et_nettoyage.sql
+```
+
+3. Cliquez sur `Run`.
+4. Revenez dans l'application et actualisez la page avec `Ctrl + F5`.
+
+Ce script fait deux choses :
+
+- il remplace la fonction `reset_company_data`
+- il nettoie immediatement les anciennes saisies deja presentes dans la base

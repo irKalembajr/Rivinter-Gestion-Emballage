@@ -557,8 +557,6 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare
-  v_actor uuid := auth.uid();
 begin
   if not public.is_principal_admin() then
     raise exception 'Reinitialisation reservee a l administrateur principal';
@@ -587,16 +585,6 @@ begin
     perform public.seed_initial_stocks();
   end if;
 
-  insert into public.app_events (actor_id, action, details)
-  values (
-    v_actor,
-    'reset_company_data',
-    jsonb_build_object(
-      'restore_seed', p_restore_seed,
-      'mode', case when p_restore_seed then 'with_reference_seed' else 'empty_user_entries' end,
-      'preserved', jsonb_build_array('locations', 'bremers', 'products', 'product_prices', 'profiles')
-    )
-  );
 end;
 $$;
 
