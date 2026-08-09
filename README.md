@@ -7,13 +7,14 @@ Application web prete pour GitHub + Vercel, avec base de donnees et authentifica
 - Dashboard global des emballages
 - Gestion des sites et axes
 - Stock initial depot et usine Brasimba en constante Q/V
+- Gestion emballages depot : repere mensuel par site, emballages + produits convertis en Bremers
 - Achats produits Brasimba
 - Achats produits multi-lignes par commande
 - Objectifs achats par quantite globale de site et par qualite/produit
-- Retours / deconsignations emballages multi-lignes
-- Consignation emballages reliee aux bordereaux finance
+- Retours / deconsignations emballages multi-lignes avec gestion du Bac vide
+- Consignation emballages reliee aux bordereaux finance, avec choix parmi tous les comptes bancaires
 - Audit mensuel saisissable par les utilisateurs affectes
-- Suivi finance : versements, comptes bancaires, dettes et paiements
+- Suivi finance : versements, consignations, comptes bancaires, dettes et paiements Brasimba
 - Suivi capital : valeur produits, caisse, dettes, plafond de credit et valeur nette
 - Reporting CSV et impression PDF
 - Gestion des comptes
@@ -92,9 +93,28 @@ Un ecart signale une anomalie possible : perte, casse d'emballages, erreur de sa
 
 1. Ouvrez `Gestion de sites`.
 2. Verifiez ou saisissez les valeurs initiales `Q` et `V`.
+   Le total affiche est calcule automatiquement par somme des quantites saisies et somme des valeurs saisies.
 3. Le compte `principal_admin` clique sur `Verrouiller le stock initial`.
 
 Apres verrouillage, le stock initial reste immuable dans l'application. Une reinitialisation principale remet les stocks initiaux de reference et rouvre la configuration.
+
+## Mise a jour 2026-08-09
+
+Cette version ajoute :
+
+- le module `Gestion emballages depot`
+- le type d'emballage `Bac vide` a `4 500 Fc`
+- les paiements Brasimba dans le suivi finance
+- le solde Brasimba global en valeur sur le dashboard
+- les indicateurs visuels vert/rouge selon le solde global
+
+Pour une base Supabase deja existante, executez d'abord ce fichier dans `SQL Editor` :
+
+```text
+supabase/maj_20260809_modules.sql
+```
+
+Ensuite seulement, envoyez les nouveaux fichiers sur GitHub et redeployez Vercel.
 
 ## Deploiement Supabase
 

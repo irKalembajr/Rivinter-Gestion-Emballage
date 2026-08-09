@@ -15,6 +15,9 @@ begin
   delete from public.purchases;
   delete from public.product_objectives;
   delete from public.objectives;
+  delete from public.depot_monthly_products;
+  delete from public.depot_monthly_packaging;
+  delete from public.finance_payments;
   delete from public.finance_loans;
   delete from public.finance_deposits;
   delete from public.capital_entries;
@@ -42,6 +45,9 @@ delete from public.packaging_returns;
 delete from public.purchases;
 delete from public.product_objectives;
 delete from public.objectives;
+delete from public.depot_monthly_products;
+delete from public.depot_monthly_packaging;
+delete from public.finance_payments;
 delete from public.finance_loans;
 delete from public.finance_deposits;
 delete from public.capital_entries;
@@ -60,6 +66,9 @@ union all select 'packaging_returns', count(*) from public.packaging_returns
 union all select 'audits', count(*) from public.audits
 union all select 'objectives', count(*) from public.objectives
 union all select 'product_objectives', count(*) from public.product_objectives
+union all select 'depot_monthly_packaging', count(*) from public.depot_monthly_packaging
+union all select 'depot_monthly_products', count(*) from public.depot_monthly_products
+union all select 'finance_payments', count(*) from public.finance_payments
 union all select 'finance_deposits', count(*) from public.finance_deposits
 union all select 'finance_loans', count(*) from public.finance_loans
 union all select 'capital_entries', count(*) from public.capital_entries

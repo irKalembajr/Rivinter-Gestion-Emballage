@@ -97,6 +97,26 @@ create table if not exists public.product_objectives (
   primary key (month, location_id, product_id)
 );
 
+create table if not exists public.depot_monthly_packaging (
+  month text not null,
+  location_id text not null references public.locations(id) on delete cascade,
+  bremer_id text not null references public.bremers(id) on delete cascade,
+  quantity numeric not null default 0,
+  value numeric not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (month, location_id, bremer_id)
+);
+
+create table if not exists public.depot_monthly_products (
+  month text not null,
+  location_id text not null references public.locations(id) on delete cascade,
+  product_id text not null references public.products(id) on delete cascade,
+  quantity numeric not null default 0,
+  value numeric not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (month, location_id, product_id)
+);
+
 create table if not exists public.purchases (
   id uuid primary key default gen_random_uuid(),
   date date not null,
@@ -193,6 +213,20 @@ create table if not exists public.finance_loans (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.finance_payments (
+  id uuid primary key default gen_random_uuid(),
+  date date not null,
+  month text not null,
+  payment_type text not null default 'payer' check (payment_type in ('payer', 'ordre_virement')),
+  bank_name text not null check (bank_name in ('Rawbank', 'TMB')),
+  account_name text not null,
+  amount numeric not null default 0,
+  ref text,
+  note text,
+  created_by uuid references auth.users(id) default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.capital_entries (
   month text not null,
   location_id text not null references public.locations(id) on delete cascade,
@@ -262,6 +296,14 @@ for each row execute function public.touch_updated_at();
 
 drop trigger if exists product_objectives_touch_updated_at on public.product_objectives;
 create trigger product_objectives_touch_updated_at before update on public.product_objectives
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists depot_monthly_packaging_touch_updated_at on public.depot_monthly_packaging;
+create trigger depot_monthly_packaging_touch_updated_at before update on public.depot_monthly_packaging
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists depot_monthly_products_touch_updated_at on public.depot_monthly_products;
+create trigger depot_monthly_products_touch_updated_at before update on public.depot_monthly_products
 for each row execute function public.touch_updated_at();
 
 drop trigger if exists audits_touch_updated_at on public.audits;
@@ -417,7 +459,8 @@ insert into public.bremers (id, code, label, excel_label, price, sort_order) val
 ('ALE50', 'ALE 50', 'Bremers 50Cl', 'Bremer 50 cl', 24500, 20),
 ('B33N', 'B33N', 'Bremers 33Cl Noir', 'Bremer 33 Noir', 16500, 30),
 ('B33V', 'B33V', 'Bremers 33Cl Vert', 'Bremer 33 Vert', 16500, 40),
-('B30CL', 'B30Cl', 'Bremers 30Cl Blanche', 'Bambi 30 cl', 16500, 50)
+('B30CL', 'B30Cl', 'Bremers 30Cl Blanche', 'Bambi 30 cl', 16500, 50),
+('BAC', 'Bac vide', 'Bac vide', 'Bac vide', 4500, 60)
 on conflict (id) do update set code = excluded.code, label = excluded.label, excel_label = excluded.excel_label, price = excluded.price, sort_order = excluded.sort_order;
 
 insert into public.products (id, name, bremer_id, price) values
@@ -481,7 +524,7 @@ set search_path = public
 as $$
 begin
   insert into public.global_factory_initial (bremer_id, quantity, value) values
-  ('B65', 2592, 0), ('ALE50', 11, 0), ('B33N', 1220, 0), ('B33V', 617, 0), ('B30CL', 771, 0)
+  ('B65', 2592, 0), ('ALE50', 11, 0), ('B33N', 1220, 0), ('B33V', 617, 0), ('B30CL', 771, 0), ('BAC', 0, 0)
   on conflict (bremer_id) do update set quantity = excluded.quantity, value = excluded.value;
 
   update public.global_factory_initial g
@@ -568,6 +611,9 @@ begin
   delete from public.purchases;
   delete from public.product_objectives;
   delete from public.objectives;
+  delete from public.depot_monthly_products;
+  delete from public.depot_monthly_packaging;
+  delete from public.finance_payments;
   delete from public.finance_loans;
   delete from public.finance_deposits;
   delete from public.capital_entries;
@@ -618,11 +664,14 @@ alter table public.initial_stocks enable row level security;
 alter table public.global_factory_initial enable row level security;
 alter table public.objectives enable row level security;
 alter table public.product_objectives enable row level security;
+alter table public.depot_monthly_packaging enable row level security;
+alter table public.depot_monthly_products enable row level security;
 alter table public.purchases enable row level security;
 alter table public.packaging_returns enable row level security;
 alter table public.audits enable row level security;
 alter table public.finance_deposits enable row level security;
 alter table public.finance_loans enable row level security;
+alter table public.finance_payments enable row level security;
 alter table public.capital_entries enable row level security;
 alter table public.capital_settings enable row level security;
 alter table public.app_events enable row level security;
@@ -690,6 +739,20 @@ drop policy if exists product_objectives_write_admin on public.product_objective
 create policy product_objectives_write_admin on public.product_objectives for all to authenticated
 using (public.is_app_admin()) with check (public.is_app_admin());
 
+drop policy if exists depot_monthly_packaging_select on public.depot_monthly_packaging;
+create policy depot_monthly_packaging_select on public.depot_monthly_packaging for select to authenticated
+using (public.can_read_location(location_id));
+drop policy if exists depot_monthly_packaging_write_admin on public.depot_monthly_packaging;
+create policy depot_monthly_packaging_write_admin on public.depot_monthly_packaging for all to authenticated
+using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists depot_monthly_products_select on public.depot_monthly_products;
+create policy depot_monthly_products_select on public.depot_monthly_products for select to authenticated
+using (public.can_read_location(location_id));
+drop policy if exists depot_monthly_products_write_admin on public.depot_monthly_products;
+create policy depot_monthly_products_write_admin on public.depot_monthly_products for all to authenticated
+using (public.is_app_admin()) with check (public.is_app_admin());
+
 drop policy if exists purchases_select on public.purchases;
 create policy purchases_select on public.purchases for select to authenticated
 using (public.can_read_location(location_id));
@@ -722,6 +785,11 @@ drop policy if exists finance_loans_select on public.finance_loans;
 create policy finance_loans_select on public.finance_loans for select to authenticated using (true);
 drop policy if exists finance_loans_write_admin on public.finance_loans;
 create policy finance_loans_write_admin on public.finance_loans for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists finance_payments_select on public.finance_payments;
+create policy finance_payments_select on public.finance_payments for select to authenticated using (true);
+drop policy if exists finance_payments_write_admin on public.finance_payments;
+create policy finance_payments_write_admin on public.finance_payments for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
 
 drop policy if exists capital_entries_select on public.capital_entries;
 create policy capital_entries_select on public.capital_entries for select to authenticated using (true);

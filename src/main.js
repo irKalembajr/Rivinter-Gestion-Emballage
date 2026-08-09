@@ -38,6 +38,11 @@ const BANK_ACCOUNTS = [
   { id: "tmb-brasimba", bank: "TMB", account: "Compte2 Brasimba", locations: ["beni", "pasisi", "komanda", "mambasa", "mungamba"], brasimba: true }
 ];
 
+const PAYMENT_TYPES = {
+  payer: "Payer",
+  ordre_virement: "Ordre de virement"
+};
+
 const ROLE_LABELS = {
   principal_admin: "Administrateur principal",
   admin: "Administrateur secondaire",
@@ -68,8 +73,11 @@ let app = {
   audits: [],
   financeDeposits: [],
   financeLoans: [],
+  financePayments: [],
   capitalEntries: [],
   capitalSettings: [],
+  depotPackaging: [],
+  depotProducts: [],
   profiles: []
 };
 
@@ -170,6 +178,7 @@ function bankAccountId(bankName, accountName) {
 }
 
 function allowedBankAccounts(locationId, purpose = "versement") {
+  if (purpose === "consignation" || purpose === "payment") return BANK_ACCOUNTS;
   return BANK_ACCOUNTS.filter((row) => row.locations.includes(locationId) && (purpose === "consignation" ? row.brasimba : true));
 }
 
@@ -200,7 +209,7 @@ function stockQty(scope, locationId, bremerId) {
 function stockValue(scope, locationId, bremerId) {
   const row = app.initialStocks.find((item) => item.scope === scope && item.location_id === locationId && item.bremer_id === bremerId);
   if (!row) return 0;
-  return n(row.value || n(row.quantity) * n(bremer(bremerId)?.price));
+  return n(row.value);
 }
 
 function globalFactoryQty(bremerId) {
@@ -210,7 +219,7 @@ function globalFactoryQty(bremerId) {
 function globalFactoryValue(bremerId) {
   const row = app.globalFactoryInitial.find((item) => item.bremer_id === bremerId);
   if (!row) return 0;
-  return n(row.value || n(row.quantity) * n(bremer(bremerId)?.price));
+  return n(row.value);
 }
 
 function bremerValue(bremerId, qty) {
@@ -446,6 +455,75 @@ function globalObjectiveTotals(ids = selectedLocationIds()) {
   }, { qty: 0, value: 0 });
 }
 
+function currentDepotLocationId(ids = selectedLocationIds()) {
+  const stored = sessionStorage.getItem("depotLocationId");
+  if (ids.includes(stored)) return stored;
+  return ids[0] || app.locations[0]?.id || "";
+}
+
+function depotPackagingEntry(locationId, bremerId) {
+  return app.depotPackaging.find((row) => row.month === app.month && row.location_id === locationId && row.bremer_id === bremerId) || { quantity: 0, value: 0 };
+}
+
+function depotProductEntry(locationId, productId) {
+  return app.depotProducts.find((row) => row.month === app.month && row.location_id === locationId && row.product_id === productId) || { quantity: 0, value: 0 };
+}
+
+function depotPackagingQty(locationId, bremerId) {
+  return n(depotPackagingEntry(locationId, bremerId).quantity);
+}
+
+function depotPackagingValue(locationId, bremerId) {
+  const row = depotPackagingEntry(locationId, bremerId);
+  return n(row.value || bremerValue(bremerId, row.quantity));
+}
+
+function depotProductsBremerQty(locationId, bremerId) {
+  return app.depotProducts.reduce((sum, row) => {
+    if (row.month !== app.month || row.location_id !== locationId) return sum;
+    if (product(row.product_id)?.bremer_id !== bremerId) return sum;
+    return sum + n(row.quantity);
+  }, 0);
+}
+
+function depotProductsBremerValue(locationId, bremerId) {
+  return bremerValue(bremerId, depotProductsBremerQty(locationId, bremerId));
+}
+
+function depotRepereQty(locationId, bremerId) {
+  return depotPackagingQty(locationId, bremerId) + depotProductsBremerQty(locationId, bremerId);
+}
+
+function depotRepereValue(locationId, bremerId) {
+  return depotPackagingValue(locationId, bremerId) + depotProductsBremerValue(locationId, bremerId);
+}
+
+function depotMonthlySummary(ids = selectedLocationIds()) {
+  return ids.reduce((acc, id) => {
+    app.bremers.forEach((b) => {
+      acc.packagingQty += depotPackagingQty(id, b.id);
+      acc.packagingValue += depotPackagingValue(id, b.id);
+      acc.productsQty += depotProductsBremerQty(id, b.id);
+      acc.productsValue += depotProductsBremerValue(id, b.id);
+      acc.totalQty += depotRepereQty(id, b.id);
+      acc.totalValue += depotRepereValue(id, b.id);
+      acc.currentQty += depositCurrent(id, b.id);
+      acc.currentValue += depositCurrentValue(id, b.id);
+    });
+    return acc;
+  }, { packagingQty: 0, packagingValue: 0, productsQty: 0, productsValue: 0, totalQty: 0, totalValue: 0, currentQty: 0, currentValue: 0 });
+}
+
+function financePaymentSummary(month = app.month) {
+  return app.financePayments
+    .filter((row) => row.month === month)
+    .reduce((acc, row) => {
+      acc.count += 1;
+      acc.value += n(row.amount);
+      return acc;
+    }, { count: 0, value: 0 });
+}
+
 function auditResult(record) {
   const fundsExpected = n(record.cash_initial) + n(record.sales_value) - n(record.rebates_value);
   const fundsControlled = n(record.cash_final) + n(record.bank_deposit) + n(record.salary) + n(record.expenses);
@@ -460,6 +538,14 @@ function auditResult(record) {
 async function requireOk(result) {
   if (result.error) throw result.error;
   return result.data;
+}
+
+async function optionalRows(result, tableName) {
+  if (!result.error) return result.data || [];
+  const message = String(result.error.message || "");
+  const missing = result.error.code === "42P01" || result.error.code === "PGRST205" || message.toLowerCase().includes(tableName.toLowerCase());
+  if (missing) return [];
+  throw result.error;
 }
 
 async function readApiResponse(response) {
@@ -547,8 +633,11 @@ async function loadData() {
     audits,
     financeDeposits,
     financeLoans,
+    financePayments,
     capitalEntries,
     capitalSettings,
+    depotPackaging,
+    depotProducts,
     profiles
   ] = await Promise.all([
     requireOk(await supabase.from("locations").select("*").order("sort_order")),
@@ -565,12 +654,15 @@ async function loadData() {
     requireOk(await supabase.from("audits").select("*")),
     requireOk(await supabase.from("finance_deposits").select("*").order("date", { ascending: false })),
     requireOk(await supabase.from("finance_loans").select("*").order("date", { ascending: false })),
+    optionalRows(await supabase.from("finance_payments").select("*").order("date", { ascending: false }), "finance_payments"),
     requireOk(await supabase.from("capital_entries").select("*")),
     requireOk(await supabase.from("capital_settings").select("*")),
+    optionalRows(await supabase.from("depot_monthly_packaging").select("*"), "depot_monthly_packaging"),
+    optionalRows(await supabase.from("depot_monthly_products").select("*"), "depot_monthly_products"),
     isAdmin() ? requireOk(await supabase.from("profiles").select("*").order("created_at", { ascending: false })) : []
   ]);
 
-  Object.assign(app, { locations, bremers, products, productPrices, settings, initialStocks, globalFactoryInitial, objectives, productObjectives, purchases, returns: returnsRows, audits, financeDeposits, financeLoans, capitalEntries, capitalSettings, profiles });
+  Object.assign(app, { locations, bremers, products, productPrices, settings, initialStocks, globalFactoryInitial, objectives, productObjectives, purchases, returns: returnsRows, audits, financeDeposits, financeLoans, financePayments, capitalEntries, capitalSettings, depotPackaging, depotProducts, profiles });
   if (!isAdmin()) app.locationFilter = app.profile.location_id || "";
   if (isAdmin() && app.locationFilter !== "all" && !allowedLocationIds().includes(app.locationFilter)) app.locationFilter = "all";
 }
@@ -612,8 +704,8 @@ function renderLocationFilter() {
   $("#locationFilter").disabled = !isAdmin();
 }
 
-function card(label, value, detail) {
-  return `<article class="card"><span>${h(label)}</span><strong>${h(value)}</strong><small>${h(detail)}</small></article>`;
+function card(label, value, detail, className = "") {
+  return `<article class="card ${h(className)}"><span>${h(label)}</span><strong>${h(value)}</strong><small>${h(detail)}</small></article>`;
 }
 
 function renderDashboard() {
@@ -623,9 +715,10 @@ function renderDashboard() {
   const purchases = purchaseSummary(ids);
   const returns = returnSummary(ids);
   const consignments = consignmentSummary(ids);
+  const factoryClass = factory.value < 0 ? "metric-negative" : factory.value > 0 ? "metric-positive" : "metric-neutral";
   return `
     <div class="cards">
-      ${card("Solde Brasimba", fmtQty(factory.qty), fmtMoney(factory.value))}
+      ${card("Solde Brasimba global", fmtMoney(factory.value), `${fmtQty(factory.qty)} emballages`, factoryClass)}
       ${card("Stock dépôts", fmtQty(depot.qty), fmtMoney(depot.value))}
       ${card("Achats du mois", fmtQty(purchases.qty), fmtMoney(purchases.value))}
       ${card("Retours du mois", fmtQty(returns.qty), fmtMoney(returns.value))}
@@ -759,6 +852,7 @@ function renderSites() {
     </section>
     ${stockPanel("depot", "Stock initial au dépôt", "Données de départ reprises du classeur Excel.", locations)}
     ${stockPanel("factory", "Stock initial à l'usine Brasimba", "Répartition du parc Brasimba par site ou axe.", locations)}
+    ${renderDepotMonthlyManagement(locations)}
     ${renderStockComparison(locations.map((row) => row.id))}
     <section class="panel">
       <div class="panel-header"><div><h2>Objectifs mensuels</h2><p>Mois sélectionné: ${h(app.month)}.</p></div></div>
@@ -777,6 +871,119 @@ function renderSites() {
   `;
 }
 
+function renderDepotMonthlyManagement(locations) {
+  const ids = locations.map((row) => row.id);
+  const locationId = currentDepotLocationId(ids);
+  const focus = loc(locationId);
+  const allSummary = depotMonthlySummary(ids);
+  const siteSummary = depotMonthlySummary(locationId ? [locationId] : []);
+  const siteGap = siteSummary.currentQty - siteSummary.totalQty;
+  return `
+    <section class="panel accent-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Gestion emballages dÃ©pÃ´t</h2>
+          <p>RepÃ¨re mensuel: emballages physiques + emballages correspondant aux produits en stock.</p>
+        </div>
+        <label>Site / axe suivi
+          <select id="depotLocationFocus">
+            ${locations.map((row) => `<option value="${row.id}" ${row.id === locationId ? "selected" : ""}>${h(row.name)}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+      <div class="cards compact-cards">
+        ${card("RepÃ¨re global dÃ©pÃ´t", fmtQty(allSummary.totalQty), fmtMoney(allSummary.totalValue), "metric-blue")}
+        ${card(`RepÃ¨re ${focus?.name || "site"}`, fmtQty(siteSummary.totalQty), fmtMoney(siteSummary.totalValue), siteGap < 0 ? "metric-negative" : "metric-positive")}
+        ${card("Emballages saisis", fmtQty(siteSummary.packagingQty), fmtMoney(siteSummary.packagingValue))}
+        ${card("Produits convertis", fmtQty(siteSummary.productsQty), fmtMoney(siteSummary.productsValue))}
+      </div>
+      <div class="split">
+        <section class="mini-panel">
+          <div class="panel-header"><div><h2>Dashboard dÃ©pÃ´t</h2><p>Emballages + produits convertis en Bremers.</p></div></div>
+          <div class="table-wrap">${depotBremerDashboard(locationId)}</div>
+        </section>
+        <section class="mini-panel">
+          <div class="panel-header"><div><h2>Lecture du repÃ¨re</h2><p>Un Ã©cart positif indique une hausse, un Ã©cart nÃ©gatif une baisse Ã  analyser.</p></div></div>
+          <div class="panel-body">
+            <div class="signal ${siteGap < 0 ? "bad" : siteGap > 0 ? "good" : ""}">
+              <strong>${fmtQty(siteGap)}</strong>
+              <span>Ã‰cart entre stock calculÃ© actuel et repÃ¨re mensuel du dÃ©pÃ´t.</span>
+            </div>
+          </div>
+        </section>
+      </div>
+      ${isAdmin() ? `
+        <div class="split">
+          <section class="mini-panel">
+            <div class="panel-header"><div><h2>Emballages du mois</h2><p>Saisie par Bremer pour ${h(focus?.name || "")}.</p></div></div>
+            <div class="table-wrap">${depotPackagingEditTable(locationId)}</div>
+          </section>
+          <section class="mini-panel">
+            <div class="panel-header"><div><h2>Produits du mois</h2><p>Les quantitÃ©s produits sont converties automatiquement en Bremers.</p></div></div>
+            <div class="table-wrap">${depotProductEditTable(locationId)}</div>
+          </section>
+        </div>
+      ` : `<div class="readonly">Lecture seule: seuls les administrateurs peuvent saisir le repÃ¨re mensuel du dÃ©pÃ´t.</div>`}
+    </section>
+  `;
+}
+
+function depotBremerDashboard(locationId) {
+  return `
+    <table>
+      <thead><tr><th>Bremer</th><th class="num">Emballages Q</th><th class="num">Produits Q</th><th class="num">Total Q</th><th class="num">Total V</th><th class="num">Stock actuel</th><th class="num">Ã‰cart</th></tr></thead>
+      <tbody>
+        ${app.bremers.map((b) => {
+          const packagingQty = depotPackagingQty(locationId, b.id);
+          const productsQty = depotProductsBremerQty(locationId, b.id);
+          const totalQty = depotRepereQty(locationId, b.id);
+          const totalValue = depotRepereValue(locationId, b.id);
+          const current = depositCurrent(locationId, b.id);
+          const gap = current - totalQty;
+          return `<tr>
+            <td>${h(b.code)} - ${h(b.label)}</td>
+            <td class="num">${fmtQty(packagingQty)}</td>
+            <td class="num">${fmtQty(productsQty)}</td>
+            <td class="num"><strong>${fmtQty(totalQty)}</strong></td>
+            <td class="num">${fmtMoney(totalValue)}</td>
+            <td class="num">${fmtQty(current)}</td>
+            <td class="num ${gap < 0 ? "status-bad" : gap > 0 ? "status-ok" : ""}">${fmtQty(gap)}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function depotPackagingEditTable(locationId) {
+  return `
+    <table>
+      <thead><tr><th>Bremer</th><th class="num">QuantitÃ©</th><th class="num">Valeur</th></tr></thead>
+      <tbody>
+        ${app.bremers.map((b) => {
+          const row = depotPackagingEntry(locationId, b.id);
+          return `<tr><td>${h(b.code)} - ${h(b.label)}</td><td><input class="depot-packaging-input" data-location="${locationId}" data-bremer="${b.id}" data-field="quantity" value="${h(row.quantity)}"></td><td><input class="depot-packaging-input" data-location="${locationId}" data-bremer="${b.id}" data-field="value" value="${h(row.value || bremerValue(b.id, row.quantity))}"></td></tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function depotProductEditTable(locationId) {
+  return `
+    <table>
+      <thead><tr><th>Produit</th><th>Bremer</th><th class="num">QuantitÃ©</th><th class="num">Valeur produit</th></tr></thead>
+      <tbody>
+        ${app.products.map((p) => {
+          const row = depotProductEntry(locationId, p.id);
+          const value = n(row.value || n(row.quantity) * productPrice(p.id, locationId));
+          return `<tr><td>${h(p.name)}</td><td>${h(bremer(p.bremer_id)?.code)}</td><td><input class="depot-product-input" data-location="${locationId}" data-product="${p.id}" value="${h(row.quantity)}"></td><td class="num">${fmtMoney(value)}</td></tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
 function stockPanel(scope, title, subtitle, locations) {
   const editable = canEditInitialStock();
   return `
@@ -790,7 +997,7 @@ function stockPanel(scope, title, subtitle, locations) {
           <thead><tr><th>Site / axe</th>${app.bremers.map((b) => `<th class="num">${h(b.code)} Q</th><th class="num">${h(b.code)} V</th>`).join("")}<th class="num">Total calculé</th></tr></thead>
           <tbody>
             ${locations.map((row) => {
-              const total = totalForLocation(row.id, scope === "factory" ? "factory" : "depot");
+              const total = initialTotalForLocation(row.id, scope);
               return `<tr><td>${h(row.name)}</td>${app.bremers.map((b) => `<td><input data-stock-scope="${scope}" data-stock-field="quantity" data-location="${row.id}" data-bremer="${b.id}" value="${h(stockQty(scope, row.id, b.id))}" ${editable ? "" : "disabled"}></td><td><input data-stock-scope="${scope}" data-stock-field="value" data-location="${row.id}" data-bremer="${b.id}" value="${h(stockValue(scope, row.id, b.id))}" ${editable ? "" : "disabled"}></td>`).join("")}<td class="num"><strong>${fmtQty(total.qty)}</strong><br><span class="notice">${fmtMoney(total.value)}</span></td></tr>`;
             }).join("")}
           </tbody>
@@ -1199,6 +1406,9 @@ function renderFinance() {
   const ids = selectedLocationIds();
   const deposits = app.financeDeposits.filter((row) => ids.includes(row.location_id) && inMonth(row.date));
   const loans = app.financeLoans.filter((row) => ids.includes(row.lender_location_id) || ids.includes(row.borrower_location_id)).filter((row) => row.month === app.month);
+  const payments = app.financePayments.filter((row) => row.month === app.month);
+  const paymentTotal = financePaymentSummary();
+  const netRivinterDebt = Math.max(0, n(capitalSetting().rivinter_debt) - paymentTotal.value);
   const totalDeposits = deposits.reduce((sum, row) => sum + n(row.amount), 0);
   const totalDebt = loans.reduce((sum, row) => sum + Math.max(0, n(row.amount) - n(row.paid_amount)), 0);
   const totalBalance = ids.reduce((sum, id) => sum + financeMetrics(id).balance, 0);
@@ -1207,6 +1417,8 @@ function renderFinance() {
       ${card("Versements banque", fmtMoney(totalDeposits), `Mois ${app.month}`)}
       ${card("Solde finance estimé", fmtMoney(totalBalance), "Versements + prêts - achats - Brasimba")}
       ${card("Dettes restantes", fmtMoney(totalDebt), "Dette et paiement")}
+      ${card("Paiements Brasimba", fmtMoney(paymentTotal.value), `${fmtQty(paymentTotal.count)} opération(s)`, paymentTotal.value > 0 ? "metric-positive" : "")}
+      ${card("Dette Rivinter nette", fmtMoney(netRivinterDebt), "Dette globale - paiements produits", netRivinterDebt > 0 ? "metric-negative" : "metric-positive")}
       ${card("Alertes prêt", fmtQty(ids.filter((id) => financeMetrics(id).balance < 0).length), "Sites sous besoin de financement")}
     </div>
     ${isAdmin() ? renderFinanceForms() : `<div class="readonly">Lecture seule: seuls les administrateurs peuvent modifier le suivi finance.</div>`}
@@ -1234,6 +1446,10 @@ function renderFinance() {
         <div class="table-wrap">${financeLoanTable(loans)}</div>
       </section>
     </div>
+    <section class="panel">
+      <div class="panel-header"><div><h2>Paiements produits Brasimba</h2><p>Payer ou ordre de virement pour les produits déjà sortis de l'usine.</p></div></div>
+      <div class="table-wrap">${financePaymentTable(payments)}</div>
+    </section>
   `;
 }
 
@@ -1271,6 +1487,20 @@ function renderFinanceForms() {
         </div>
       </section>
     </div>
+    <section class="panel">
+      <div class="panel-header"><div><h2>Paiement produits Brasimba</h2><p>Le montant payé diminue la dette globale Rivinter envers Brasimba.</p></div></div>
+      <div class="panel-body">
+        <form id="financePaymentForm" class="form-grid">
+          <label>Date<input type="date" name="date" required value="${today()}"></label>
+          <label>Action<select name="payment_type"><option value="payer">Payer</option><option value="ordre_virement">Ordre de virement</option></select></label>
+          <label>Compte bancaire<select name="account_id" required>${financeAccountOptions("", "payment")}</select></label>
+          <label>Montant Fc<input name="amount" inputmode="numeric" required></label>
+          <label>Référence<input name="ref" placeholder="Bordereau, OV, note"></label>
+          <label class="span-2">Note<input name="note"></label>
+          <button>Enregistrer paiement</button>
+        </form>
+      </div>
+    </section>
   `;
 }
 
@@ -1296,6 +1526,17 @@ function financeLoanTable(rows) {
   `;
 }
 
+function financePaymentTable(rows) {
+  return `
+    <table>
+      <thead><tr><th>Date</th><th>Action</th><th>Banque</th><th>Compte</th><th>Référence</th><th class="num">Montant</th><th>Action</th></tr></thead>
+      <tbody>
+        ${rows.map((row) => `<tr><td>${h(row.date)}</td><td>${h(PAYMENT_TYPES[row.payment_type] || row.payment_type)}</td><td>${h(row.bank_name)}</td><td>${h(row.account_name)}</td><td>${h(row.ref || "-")}</td><td class="num">${fmtMoney(row.amount)}</td><td>${isAdmin() ? `<button class="danger" data-delete="finance_payments:${row.id}">Supprimer</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="7">Aucun paiement Brasimba pour le mois.</td></tr>`}
+      </tbody>
+    </table>
+  `;
+}
+
 function capitalSetting() {
   return app.capitalSettings.find((row) => row.month === app.month) || {
     month: app.month,
@@ -1315,13 +1556,15 @@ function capitalMetrics() {
   const cashValue = entries.reduce((sum, row) => sum + n(row.cash_value), 0);
   const siteDebt = entries.reduce((sum, row) => sum + n(row.debt_value), 0);
   const otherValue = entries.reduce((sum, row) => sum + n(row.other_value), 0);
-  const debt = n(setting.rivinter_debt) || siteDebt;
+  const payments = financePaymentSummary().value;
+  const grossDebt = n(setting.rivinter_debt) || siteDebt;
+  const debt = Math.max(0, grossDebt - payments);
   const overrun = Math.max(0, n(setting.current_credit_level) - n(setting.credit_limit));
   const margin = Math.max(0, n(setting.credit_limit) - n(setting.current_credit_level));
   const productsCashNet = productValue + cashValue - n(setting.rebates_value);
   const realNet = productsCashNet + n(setting.free_value) + otherValue - debt - overrun;
   const usageRate = n(setting.credit_limit) ? n(setting.current_credit_level) / n(setting.credit_limit) * 100 : 0;
-  return { entries, setting, productValue, cashValue, siteDebt, otherValue, debt, overrun, margin, productsCashNet, realNet, usageRate };
+  return { entries, setting, productValue, cashValue, siteDebt, otherValue, payments, grossDebt, debt, overrun, margin, productsCashNet, realNet, usageRate };
 }
 
 function renderCapital() {
@@ -1344,7 +1587,9 @@ function renderCapital() {
             <tr><td>Valeur Espèce</td><td class="num">${fmtMoney(metrics.cashValue)}</td></tr>
             <tr><td>Ristourne client globale</td><td class="num">${fmtMoney(metrics.setting.rebates_value)}</td></tr>
             <tr><td>Produits + Caisse - Ristournes clients</td><td class="num">${fmtMoney(metrics.productsCashNet)}</td></tr>
-            <tr><td>Dette totale Rivinter</td><td class="num">${fmtMoney(metrics.debt)}</td></tr>
+            <tr><td>Dette Rivinter avant paiements</td><td class="num">${fmtMoney(metrics.grossDebt)}</td></tr>
+            <tr><td>Paiements produits Brasimba</td><td class="num">${fmtMoney(metrics.payments)}</td></tr>
+            <tr><td>Dette totale Rivinter nette</td><td class="num">${fmtMoney(metrics.debt)}</td></tr>
             <tr><td>Gratuits reçus</td><td class="num">${fmtMoney(metrics.setting.free_value)}</td></tr>
             <tr><td>Dépassement ligne de crédit</td><td class="num">${fmtMoney(metrics.overrun)}</td></tr>
             <tr><td>Marge disponible</td><td class="num">${fmtMoney(metrics.margin)}</td></tr>
@@ -1594,6 +1839,9 @@ function resetRemainingRows() {
     ["objectifs produits", app.productObjectives.length],
     ["versements", app.financeDeposits.length],
     ["dettes", app.financeLoans.length],
+    ["paiements Brasimba", app.financePayments.length],
+    ["repères dépôt emballages", app.depotPackaging.length],
+    ["repères dépôt produits", app.depotProducts.length],
     ["capital", app.capitalEntries.length],
     ["paramètres capital", app.capitalSettings.length],
     ["stocks initiaux", app.initialStocks.length + app.globalFactoryInitial.length]
@@ -1719,6 +1967,10 @@ document.addEventListener("change", async (event) => {
     sessionStorage.setItem("objectiveProductId", event.target.value);
     render();
   }
+  if (event.target.id === "depotLocationFocus") {
+    sessionStorage.setItem("depotLocationId", event.target.value);
+    render();
+  }
   if (event.target.closest("#purchaseForm") || event.target.closest("#consignmentForm") || event.target.closest("#financeDepositForm")) {
     syncDynamicForms();
   }
@@ -1794,6 +2046,49 @@ document.addEventListener("input", async (event) => {
       location_id: productObjectiveInput.dataset.location,
       product_id: productObjectiveInput.dataset.product,
       qty: n(current.qty)
+    }, { onConflict: "month,location_id,product_id" });
+  }
+
+  const depotPackagingInput = event.target.closest(".depot-packaging-input");
+  if (depotPackagingInput && isAdmin()) {
+    let current = app.depotPackaging.find((row) =>
+      row.month === app.month
+      && row.location_id === depotPackagingInput.dataset.location
+      && row.bremer_id === depotPackagingInput.dataset.bremer
+    );
+    if (!current) {
+      current = { month: app.month, location_id: depotPackagingInput.dataset.location, bremer_id: depotPackagingInput.dataset.bremer, quantity: 0, value: 0 };
+      app.depotPackaging.push(current);
+    }
+    current[depotPackagingInput.dataset.field] = n(depotPackagingInput.value);
+    await supabase.from("depot_monthly_packaging").upsert({
+      month: app.month,
+      location_id: current.location_id,
+      bremer_id: current.bremer_id,
+      quantity: n(current.quantity),
+      value: n(current.value)
+    }, { onConflict: "month,location_id,bremer_id" });
+  }
+
+  const depotProductInput = event.target.closest(".depot-product-input");
+  if (depotProductInput && isAdmin()) {
+    let current = app.depotProducts.find((row) =>
+      row.month === app.month
+      && row.location_id === depotProductInput.dataset.location
+      && row.product_id === depotProductInput.dataset.product
+    );
+    if (!current) {
+      current = { month: app.month, location_id: depotProductInput.dataset.location, product_id: depotProductInput.dataset.product, quantity: 0, value: 0 };
+      app.depotProducts.push(current);
+    }
+    current.quantity = n(depotProductInput.value);
+    current.value = current.quantity * productPrice(current.product_id, current.location_id);
+    await supabase.from("depot_monthly_products").upsert({
+      month: app.month,
+      location_id: current.location_id,
+      product_id: current.product_id,
+      quantity: n(current.quantity),
+      value: n(current.value)
     }, { onConflict: "month,location_id,product_id" });
   }
 
@@ -1926,6 +2221,24 @@ document.addEventListener("submit", async (event) => {
         purpose: data.purpose,
         amount: n(data.amount),
         bordereau_no: data.bordereau_no,
+        note: data.note
+      }));
+      await refresh();
+      return;
+    }
+
+    if (event.target.id === "financePaymentForm" && isAdmin()) {
+      const data = formObject(event.target);
+      const account = bankAccount(data.account_id);
+      if (!account) throw new Error("Compte bancaire invalide.");
+      await requireOk(await supabase.from("finance_payments").insert({
+        date: data.date,
+        month: String(data.date).slice(0, 7),
+        payment_type: data.payment_type,
+        bank_name: account.bank,
+        account_name: account.account,
+        amount: n(data.amount),
+        ref: data.ref,
         note: data.note
       }));
       await refresh();

@@ -15,6 +15,9 @@ begin
   delete from public.purchases;
   delete from public.product_objectives;
   delete from public.objectives;
+  delete from public.depot_monthly_products;
+  delete from public.depot_monthly_packaging;
+  delete from public.finance_payments;
   delete from public.finance_loans;
   delete from public.finance_deposits;
   delete from public.capital_entries;
