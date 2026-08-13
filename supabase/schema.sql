@@ -117,6 +117,16 @@ create table if not exists public.depot_monthly_products (
   primary key (month, location_id, product_id)
 );
 
+create table if not exists public.daily_stocks (
+  date date not null,
+  location_id text not null references public.locations(id) on delete cascade,
+  bremer_id text not null references public.bremers(id) on delete cascade,
+  quantity numeric not null default 0 check (quantity >= 0),
+  created_by uuid references auth.users(id) default auth.uid(),
+  updated_at timestamptz not null default now(),
+  primary key (date, location_id, bremer_id)
+);
+
 create table if not exists public.purchases (
   id uuid primary key default gen_random_uuid(),
   date date not null,
@@ -304,6 +314,10 @@ for each row execute function public.touch_updated_at();
 
 drop trigger if exists depot_monthly_products_touch_updated_at on public.depot_monthly_products;
 create trigger depot_monthly_products_touch_updated_at before update on public.depot_monthly_products
+for each row execute function public.touch_updated_at();
+
+drop trigger if exists daily_stocks_touch_updated_at on public.daily_stocks;
+create trigger daily_stocks_touch_updated_at before update on public.daily_stocks
 for each row execute function public.touch_updated_at();
 
 drop trigger if exists audits_touch_updated_at on public.audits;
@@ -612,6 +626,7 @@ begin
   delete from public.product_objectives;
   delete from public.objectives;
   delete from public.depot_monthly_products;
+  delete from public.daily_stocks;
   delete from public.depot_monthly_packaging;
   delete from public.finance_payments;
   delete from public.finance_loans;
@@ -666,6 +681,7 @@ alter table public.objectives enable row level security;
 alter table public.product_objectives enable row level security;
 alter table public.depot_monthly_packaging enable row level security;
 alter table public.depot_monthly_products enable row level security;
+alter table public.daily_stocks enable row level security;
 alter table public.purchases enable row level security;
 alter table public.packaging_returns enable row level security;
 alter table public.audits enable row level security;
@@ -751,6 +767,13 @@ create policy depot_monthly_products_select on public.depot_monthly_products for
 using (public.can_read_location(location_id));
 drop policy if exists depot_monthly_products_write_admin on public.depot_monthly_products;
 create policy depot_monthly_products_write_admin on public.depot_monthly_products for all to authenticated
+using (public.is_app_admin()) with check (public.is_app_admin());
+
+drop policy if exists daily_stocks_select on public.daily_stocks;
+create policy daily_stocks_select on public.daily_stocks for select to authenticated
+using (public.can_read_location(location_id));
+drop policy if exists daily_stocks_write_admin on public.daily_stocks;
+create policy daily_stocks_write_admin on public.daily_stocks for all to authenticated
 using (public.is_app_admin()) with check (public.is_app_admin());
 
 drop policy if exists purchases_select on public.purchases;

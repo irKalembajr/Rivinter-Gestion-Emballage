@@ -486,6 +486,10 @@ td.num, th.num { text-align: right; }
 .status-bad { color: var(--danger); font-weight: 700; }
 .status-warn { color: var(--warning); font-weight: 700; }
 
+.bac-row { background: #fff8e6; }
+.bac-panel { border-color: #e7bf59; }
+.daily-site { margin: 14px; }
+
 .progress {
   height: 8px;
   border-radius: 99px;

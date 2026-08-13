@@ -7,6 +7,7 @@ delete from public.purchases;
 delete from public.product_objectives;
 delete from public.objectives;
 delete from public.depot_monthly_products;
+delete from public.daily_stocks;
 delete from public.depot_monthly_packaging;
 delete from public.finance_payments;
 delete from public.finance_loans;

@@ -116,6 +116,16 @@ supabase/maj_20260809_modules.sql
 
 Ensuite seulement, envoyez les nouveaux fichiers sur GitHub et redeployez Vercel.
 
+## Mise à jour 2026-08-13
+
+- gestion des bacs séparée des emballages et produits
+- calcul automatique des valeurs depuis les constantes Bremers
+- nouveau module de gestion journalière
+- contrôle stock initial moins situation journalière avec statuts Correct, Dette et Excédent
+- reporting global enrichi
+
+Pour une base existante, exécutez `supabase/maj_20260813_gestion_journaliere.sql` avant le redéploiement.
+
 ## Deploiement Supabase
 
 1. Creez un projet sur Supabase.

@@ -21,6 +21,7 @@ const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supa
 const NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", subtitle: "Vue globale des stocks, achats, retours et audits." },
   { id: "sites", label: "Gestion de sites", subtitle: "Stocks initiaux au dépôt, à l'usine et objectifs d'achat." },
+  { id: "daily", label: "Gestion journalière", subtitle: "Situation quotidienne des emballages par site et axe." },
   { id: "purchases", label: "Achats produits", subtitle: "Produits Brasimba achetés par site ou par axe." },
   { id: "returns", label: "Retour emballages", subtitle: "Déconsignations envoyées à Brasimba par type de Bremer." },
   { id: "audit", label: "Audit", subtitle: "Résultat mensuel par site selon caisse, produits, dépenses et banque." },
@@ -78,6 +79,7 @@ let app = {
   capitalSettings: [],
   depotPackaging: [],
   depotProducts: [],
+  dailyStocks: [],
   profiles: []
 };
 
@@ -142,6 +144,18 @@ function loc(id) {
 
 function bremer(id) {
   return app.bremers.find((row) => row.id === id);
+}
+
+function isBac(bremerOrId) {
+  return String(typeof bremerOrId === "object" ? bremerOrId?.id : bremerOrId).toUpperCase() === "BAC";
+}
+
+function packagingBremers() {
+  return app.bremers.filter((row) => !isBac(row));
+}
+
+function bacBremers() {
+  return app.bremers.filter((row) => isBac(row));
 }
 
 function product(id) {
@@ -341,7 +355,7 @@ function factoryGlobalCurrentValue(bremerId) {
 }
 
 function totalForLocation(locationId, source) {
-  return app.bremers.reduce((acc, b) => {
+  return packagingBremers().reduce((acc, b) => {
     const qty = source === "factory" ? factoryLocationCurrent(locationId, b.id) : depositCurrent(locationId, b.id);
     const value = source === "factory" ? factoryLocationCurrentValue(locationId, b.id) : depositCurrentValue(locationId, b.id);
     acc.qty += qty;
@@ -351,16 +365,42 @@ function totalForLocation(locationId, source) {
 }
 
 function initialTotalForLocation(locationId, scope = "depot") {
-  return app.bremers.reduce((acc, b) => {
+  return packagingBremers().reduce((acc, b) => {
     acc.qty += stockQty(scope, locationId, b.id);
-    acc.value += stockValue(scope, locationId, b.id);
+    acc.value += bremerValue(b.id, stockQty(scope, locationId, b.id));
+    return acc;
+  }, { qty: 0, value: 0 });
+}
+
+function initialBacTotalForLocation(locationId, scope = "depot") {
+  return bacBremers().reduce((acc, b) => {
+    const qty = stockQty(scope, locationId, b.id);
+    acc.qty += qty;
+    acc.value += bremerValue(b.id, qty);
+    return acc;
+  }, { qty: 0, value: 0 });
+}
+
+function dailyEntry(date, locationId, bremerId) {
+  return app.dailyStocks.find((row) => row.date === date && row.location_id === locationId && row.bremer_id === bremerId) || { quantity: 0 };
+}
+
+function dailyQty(date, locationId, bremerId) {
+  return n(dailyEntry(date, locationId, bremerId).quantity);
+}
+
+function dailyTotal(date, locationId, bacOnly = false) {
+  return (bacOnly ? bacBremers() : packagingBremers()).reduce((acc, b) => {
+    const qty = dailyQty(date, locationId, b.id);
+    acc.qty += qty;
+    acc.value += bremerValue(b.id, qty);
     return acc;
   }, { qty: 0, value: 0 });
 }
 
 function selectionFactoryTotal(ids = selectedLocationIds()) {
   if (isAdmin() && app.locationFilter === "all") {
-    return app.bremers.reduce((acc, b) => {
+    return packagingBremers().reduce((acc, b) => {
       const qty = factoryGlobalCurrent(b.id);
       acc.qty += qty;
       acc.value += factoryGlobalCurrentValue(b.id);
@@ -384,6 +424,15 @@ function selectionDepositTotal(ids = selectedLocationIds()) {
   }, { qty: 0, value: 0 });
 }
 
+function bacCurrentTotal(ids = selectedLocationIds(), source = "depot") {
+  return ids.reduce((acc, id) => bacBremers().reduce((inner, b) => {
+    const qty = source === "factory" ? factoryLocationCurrent(id, b.id) : depositCurrent(id, b.id);
+    inner.qty += qty;
+    inner.value += bremerValue(b.id, qty);
+    return inner;
+  }, acc), { qty: 0, value: 0 });
+}
+
 function purchaseSummary(ids = selectedLocationIds(), month = app.month, range = null) {
   return app.purchases
     .filter((row) => ids.includes(row.location_id))
@@ -398,6 +447,7 @@ function purchaseSummary(ids = selectedLocationIds(), month = app.month, range =
 
 function returnSummary(ids = selectedLocationIds(), month = app.month, range = null) {
   return returnRowsOnly()
+    .filter((row) => !isBac(row.bremer_id))
     .filter((row) => ids.includes(row.location_id))
     .filter((row) => range ? dateBetween(row.date, range.start, range.end) : inMonth(row.date, month))
     .reduce((acc, row) => {
@@ -407,6 +457,14 @@ function returnSummary(ids = selectedLocationIds(), month = app.month, range = n
       acc.gapValue += returnGap(row) * n(bremer(row.bremer_id)?.price);
       return acc;
     }, { qty: 0, value: 0, gap: 0, gapValue: 0 });
+}
+
+function bacReturnSummary(ids = selectedLocationIds(), month = app.month, range = null) {
+  return returnRowsOnly().filter((row) => isBac(row.bremer_id) && ids.includes(row.location_id)).filter((row) => range ? dateBetween(row.date, range.start, range.end) : inMonth(row.date, month)).reduce((acc, row) => {
+    acc.qty += n(row.quantity);
+    acc.value += returnValue(row);
+    return acc;
+  }, { qty: 0, value: 0 });
 }
 
 function consignmentSummary(ids = selectedLocationIds(), month = app.month) {
@@ -638,6 +696,7 @@ async function loadData() {
     capitalSettings,
     depotPackaging,
     depotProducts,
+    dailyStocks,
     profiles
   ] = await Promise.all([
     requireOk(await supabase.from("locations").select("*").order("sort_order")),
@@ -659,10 +718,11 @@ async function loadData() {
     requireOk(await supabase.from("capital_settings").select("*")),
     optionalRows(await supabase.from("depot_monthly_packaging").select("*"), "depot_monthly_packaging"),
     optionalRows(await supabase.from("depot_monthly_products").select("*"), "depot_monthly_products"),
+    optionalRows(await supabase.from("daily_stocks").select("*").order("date", { ascending: false }), "daily_stocks"),
     isAdmin() ? requireOk(await supabase.from("profiles").select("*").order("created_at", { ascending: false })) : []
   ]);
 
-  Object.assign(app, { locations, bremers, products, productPrices, settings, initialStocks, globalFactoryInitial, objectives, productObjectives, purchases, returns: returnsRows, audits, financeDeposits, financeLoans, financePayments, capitalEntries, capitalSettings, depotPackaging, depotProducts, profiles });
+  Object.assign(app, { locations, bremers, products, productPrices, settings, initialStocks, globalFactoryInitial, objectives, productObjectives, purchases, returns: returnsRows, audits, financeDeposits, financeLoans, financePayments, capitalEntries, capitalSettings, depotPackaging, depotProducts, dailyStocks, profiles });
   if (!isAdmin()) app.locationFilter = app.profile.location_id || "";
   if (isAdmin() && app.locationFilter !== "all" && !allowedLocationIds().includes(app.locationFilter)) app.locationFilter = "all";
 }
@@ -683,6 +743,7 @@ function render() {
   const renderers = {
     dashboard: renderDashboard,
     sites: renderSites,
+    daily: renderDailyManagement,
     purchases: renderPurchases,
     returns: renderReturns,
     audit: renderAudit,
@@ -715,6 +776,8 @@ function renderDashboard() {
   const purchases = purchaseSummary(ids);
   const returns = returnSummary(ids);
   const consignments = consignmentSummary(ids);
+  const depotBacs = bacCurrentTotal(ids);
+  const factoryBacs = bacCurrentTotal(ids, "factory");
   const factoryClass = factory.value < 0 ? "metric-negative" : factory.value > 0 ? "metric-positive" : "metric-neutral";
   return `
     <div class="cards">
@@ -724,17 +787,18 @@ function renderDashboard() {
       ${card("Retours du mois", fmtQty(returns.qty), fmtMoney(returns.value))}
       ${card("Consignations", fmtQty(consignments.qty), fmtMoney(consignments.value))}
     </div>
+    <section class="panel bac-panel"><div class="panel-header"><div><h2>Gestion des bacs — séparée</h2><p>Ces quantités et valeurs ne sont pas incluses dans les totaux emballages/produits.</p></div></div><div class="cards compact-cards">${card("Bacs aux dépôts", fmtQty(depotBacs.qty), fmtMoney(depotBacs.value))}${card("Bacs usine Brasimba", fmtQty(factoryBacs.qty), fmtMoney(factoryBacs.value))}${card("Retours de bacs du mois", fmtQty(bacReturnSummary(ids).qty), fmtMoney(bacReturnSummary(ids).value))}</div></section>
     <div class="split">
       <section class="panel">
         <div class="panel-header"><div><h2>Stock par site et axe</h2><p>Dépôt = initial + achats produits - retours emballages.</p></div></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Site / axe</th><th>Type</th>${app.bremers.map((b) => `<th class="num">${h(b.code)}</th>`).join("")}<th class="num">Total</th><th class="num">Valeur</th></tr></thead>
+            <thead><tr><th>Site / axe</th><th>Type</th>${packagingBremers().map((b) => `<th class="num">${h(b.code)}</th>`).join("")}<th class="num">Total</th><th class="num">Valeur</th></tr></thead>
             <tbody>
               ${app.locations.filter((row) => ids.includes(row.id)).map((row) => {
                 const total = totalForLocation(row.id, "depot");
                 return `<tr><td>${h(row.name)}</td><td><span class="pill neutral">${h(row.kind)}</span></td>
-                  ${app.bremers.map((b) => `<td class="num ${depositCurrent(row.id, b.id) < 0 ? "status-bad" : ""}">${fmtQty(depositCurrent(row.id, b.id))}</td>`).join("")}
+                  ${packagingBremers().map((b) => `<td class="num ${depositCurrent(row.id, b.id) < 0 ? "status-bad" : ""}">${fmtQty(depositCurrent(row.id, b.id))}</td>`).join("")}
                   <td class="num"><strong>${fmtQty(total.qty)}</strong></td><td class="num">${fmtMoney(total.value)}</td></tr>`;
               }).join("") || `<tr><td colspan="9">Aucune donnée visible.</td></tr>`}
             </tbody>
@@ -747,7 +811,7 @@ function renderDashboard() {
           <table>
             <thead><tr><th>Bremer</th><th class="num">Quantité</th><th class="num">Valeur</th></tr></thead>
             <tbody>
-              ${app.bremers.map((b) => {
+              ${packagingBremers().map((b) => {
                 const qty = isAdmin() && app.locationFilter === "all"
                   ? factoryGlobalCurrent(b.id)
                   : ids.reduce((sum, id) => sum + factoryLocationCurrent(id, b.id), 0);
@@ -767,12 +831,13 @@ function renderDashboard() {
 }
 
 function renderStockComparison(ids = selectedLocationIds()) {
+  const date = sessionStorage.getItem("dailyDate") || today();
   return `
     <section class="panel">
       <div class="panel-header">
         <div>
           <h2>Contrôle Stock Initial vs Stock Calculé</h2>
-          <p>Stock calculé = Stock Initial + Achats emballages - Retours emballages. L'écart signale pertes, casses ou erreurs de saisie.</p>
+          <p>Solde contrôlé = Stock initial − situation journalière du ${h(date)}. Les bacs sont exclus de ce contrôle.</p>
         </div>
       </div>
       <div class="table-wrap">
@@ -782,29 +847,29 @@ function renderStockComparison(ids = selectedLocationIds()) {
               <th>Site / axe</th>
               <th class="num">Initial Q</th>
               <th class="num">Initial V</th>
-              <th class="num">Calculé Q</th>
-              <th class="num">Calculé V</th>
-              <th class="num">Écart Q</th>
-              <th class="num">Écart V</th>
+              <th class="num">Journalier Q</th>
+              <th class="num">Journalier V</th>
+              <th class="num">Solde Q</th>
+              <th class="num">Solde V</th>
               <th>État</th>
             </tr>
           </thead>
           <tbody>
             ${app.locations.filter((row) => ids.includes(row.id)).map((row) => {
               const initial = initialTotalForLocation(row.id, "depot");
-              const current = totalForLocation(row.id, "depot");
-              const gapQ = current.qty - initial.qty;
-              const gapV = current.value - initial.value;
-              const conform = gapQ === 0 && gapV === 0;
+              const current = dailyTotal(date, row.id);
+              const gapQ = initial.qty - current.qty;
+              const gapV = initial.value - current.value;
+              const status = gapQ === 0 ? { label: "Correct", pill: "", cls: "status-ok" } : gapQ > 0 ? { label: "Dette", pill: "bad", cls: "status-bad" } : { label: "Excédent", pill: "warn", cls: "status-warn" };
               return `<tr>
                 <td>${h(row.name)}</td>
                 <td class="num">${fmtQty(initial.qty)}</td>
                 <td class="num">${fmtMoney(initial.value)}</td>
                 <td class="num">${fmtQty(current.qty)}</td>
                 <td class="num">${fmtMoney(current.value)}</td>
-                <td class="num ${gapQ < 0 ? "status-bad" : gapQ > 0 ? "status-ok" : ""}">${fmtQty(gapQ)}</td>
-                <td class="num ${gapV < 0 ? "status-bad" : gapV > 0 ? "status-ok" : ""}">${fmtMoney(gapV)}</td>
-                <td><span class="pill ${conform ? "" : "warn"}">${conform ? "État conforme" : "Anomalie à contrôler"}</span></td>
+                <td class="num ${status.cls}">${fmtQty(gapQ)}</td>
+                <td class="num ${status.cls}">${fmtMoney(gapV)}</td>
+                <td><span class="pill ${status.pill}">${status.label}</span></td>
               </tr>`;
             }).join("")}
           </tbody>
@@ -812,6 +877,28 @@ function renderStockComparison(ids = selectedLocationIds()) {
       </div>
     </section>
   `;
+}
+
+function renderDailyManagement() {
+  const locations = app.locations.filter((row) => selectedLocationIds().includes(row.id));
+  const date = sessionStorage.getItem("dailyDate") || today();
+  return `
+    <section class="panel">
+      <div class="panel-header"><div><h2>Gestion journalière</h2><p>Encodez les quantités physiques en fin de journée. Les valeurs sont automatiques.</p></div><label>Date de situation<input id="dailyDate" type="date" value="${h(date)}"></label></div>
+      ${locations.map((location) => dailyLocationPanel(date, location)).join("")}
+    </section>
+    ${renderStockComparison(locations.map((row) => row.id))}
+  `;
+}
+
+function dailyLocationPanel(date, location) {
+  const packaging = dailyTotal(date, location.id);
+  const bac = dailyTotal(date, location.id, true);
+  return `<section class="mini-panel daily-site"><div class="panel-header"><div><h2>${h(location.name)}</h2><p>${h(location.kind)}</p></div></div><div class="table-wrap"><table>
+    <thead><tr><th>Bremer</th><th class="num">Quantité</th><th class="num">Constante</th><th class="num">Valeur calculée</th></tr></thead>
+    <tbody>${app.bremers.map((b) => `<tr class="${isBac(b) ? "bac-row" : ""}"><td>${h(b.code)} - ${h(b.label)}${isBac(b) ? " (séparé)" : ""}</td><td><input class="daily-stock-input" data-date="${date}" data-location="${location.id}" data-bremer="${b.id}" value="${h(dailyQty(date, location.id, b.id))}" ${isAdmin() ? "" : "disabled"}></td><td class="num">${fmtMoney(b.price)}</td><td class="num">${fmtMoney(bremerValue(b.id, dailyQty(date, location.id, b.id)))}</td></tr>`).join("")}</tbody>
+    <tfoot><tr><th>Emballages (hors bacs)</th><th class="num">${fmtQty(packaging.qty)}</th><th></th><th class="num">${fmtMoney(packaging.value)}</th></tr><tr class="bac-row"><th>Bacs uniquement</th><th class="num">${fmtQty(bac.qty)}</th><th></th><th class="num">${fmtMoney(bac.value)}</th></tr></tfoot>
+  </table></div></section>`;
 }
 
 function renderObjectives(ids = selectedLocationIds()) {
@@ -851,8 +938,7 @@ function renderSites() {
       ${isPrincipalAdmin() && !locked ? `<div class="panel-body toolbar"><button id="lockInitialStockBtn" type="button">Verrouiller le stock initial</button><span class="notice">Après verrouillage, les valeurs Q/V ne seront plus modifiables dans l'application.</span></div>` : ""}
     </section>
     ${stockPanel("depot", "Stock initial au dépôt", "Données de départ reprises du classeur Excel.", locations)}
-    ${stockPanel("factory", "Stock initial à l'usine Brasimba", "Répartition du parc Brasimba par site ou axe.", locations)}
-    ${renderDepotMonthlyManagement(locations)}
+    ${stockPanel("factory", "Stock initial à l'usine Brasimba", "Stock global Brasimba; valeurs calculées automatiquement.", locations)}
     ${renderStockComparison(locations.map((row) => row.id))}
     <section class="panel">
       <div class="panel-header"><div><h2>Objectifs mensuels</h2><p>Mois sélectionné: ${h(app.month)}.</p></div></div>
@@ -986,19 +1072,26 @@ function depotProductEditTable(locationId) {
 
 function stockPanel(scope, title, subtitle, locations) {
   const editable = canEditInitialStock();
+  if (scope === "factory") return `
+    <section class="panel">
+      <div class="panel-header"><div><h2>${h(title)}</h2><p>${h(subtitle)}</p></div></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Type</th><th class="num">Quantité globale</th><th class="num">Constante</th><th class="num">Valeur automatique</th></tr></thead>
+        <tbody>${app.bremers.map((b) => `<tr class="${isBac(b) ? "bac-row" : ""}"><td>${h(b.code)} - ${h(b.label)}${isBac(b) ? " (gestion séparée)" : ""}</td><td><input class="global-factory-input" data-field="quantity" data-bremer="${b.id}" value="${h(globalFactoryQty(b.id))}" ${editable ? "" : "disabled"}></td><td class="num">${fmtMoney(b.price)}</td><td class="num">${fmtMoney(bremerValue(b.id, globalFactoryQty(b.id)))}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><th>Emballages (hors bacs)</th><th class="num">${fmtQty(packagingBremers().reduce((sum, b) => sum + globalFactoryQty(b.id), 0))}</th><th></th><th class="num">${fmtMoney(packagingBremers().reduce((sum, b) => sum + bremerValue(b.id, globalFactoryQty(b.id)), 0))}</th></tr><tr class="bac-row"><th>Bacs uniquement</th><th class="num">${fmtQty(bacBremers().reduce((sum, b) => sum + globalFactoryQty(b.id), 0))}</th><th></th><th class="num">${fmtMoney(bacBremers().reduce((sum, b) => sum + bremerValue(b.id, globalFactoryQty(b.id)), 0))}</th></tr></tfoot>
+      </table></div>
+    </section>`;
   return `
     <section class="panel">
       <div class="panel-header"><div><h2>${h(title)}</h2><p>${h(subtitle)}</p></div></div>
-      ${scope === "factory" && isAdmin() ? `<div class="panel-body"><div class="form-grid">
-        ${app.bremers.map((b) => `<label>${h(b.code)} global Q<input class="global-factory-input" data-field="quantity" data-bremer="${b.id}" value="${h(globalFactoryQty(b.id))}" ${editable ? "" : "disabled"}></label><label>${h(b.code)} global V<input class="global-factory-input" data-field="value" data-bremer="${b.id}" value="${h(globalFactoryValue(b.id))}" ${editable ? "" : "disabled"}></label>`).join("")}
-      </div></div>` : ""}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Site / axe</th>${app.bremers.map((b) => `<th class="num">${h(b.code)} Q</th><th class="num">${h(b.code)} V</th>`).join("")}<th class="num">Total calculé</th></tr></thead>
+          <thead><tr><th>Site / axe</th>${app.bremers.map((b) => `<th class="num">${h(b.code)} Q</th><th class="num">${h(b.code)} V auto</th>`).join("")}<th class="num">Emballages</th><th class="num">Bacs séparés</th></tr></thead>
           <tbody>
             ${locations.map((row) => {
               const total = initialTotalForLocation(row.id, scope);
-              return `<tr><td>${h(row.name)}</td>${app.bremers.map((b) => `<td><input data-stock-scope="${scope}" data-stock-field="quantity" data-location="${row.id}" data-bremer="${b.id}" value="${h(stockQty(scope, row.id, b.id))}" ${editable ? "" : "disabled"}></td><td><input data-stock-scope="${scope}" data-stock-field="value" data-location="${row.id}" data-bremer="${b.id}" value="${h(stockValue(scope, row.id, b.id))}" ${editable ? "" : "disabled"}></td>`).join("")}<td class="num"><strong>${fmtQty(total.qty)}</strong><br><span class="notice">${fmtMoney(total.value)}</span></td></tr>`;
+              const bac = initialBacTotalForLocation(row.id, scope);
+              return `<tr><td>${h(row.name)}</td>${app.bremers.map((b) => `<td><input data-stock-scope="${scope}" data-stock-field="quantity" data-location="${row.id}" data-bremer="${b.id}" value="${h(stockQty(scope, row.id, b.id))}" ${editable ? "" : "disabled"}></td><td class="num ${isBac(b) ? "bac-row" : ""}">${fmtMoney(bremerValue(b.id, stockQty(scope, row.id, b.id)))}</td>`).join("")}<td class="num"><strong>${fmtQty(total.qty)}</strong><br><span class="notice">${fmtMoney(total.value)}</span></td><td class="num bac-row"><strong>${fmtQty(bac.qty)}</strong><br><span class="notice">${fmtMoney(bac.value)}</span></td></tr>`;
             }).join("")}
           </tbody>
         </table>
@@ -1668,6 +1761,16 @@ function capitalTable(rows) {
 
 function renderReports() {
   const ids = selectedLocationIds();
+  const goals = globalObjectiveTotals(ids);
+  const done = purchaseSummary(ids);
+  const returned = returnSummary(ids);
+  const returnedBacs = bacReturnSummary(ids);
+  const pct = goals.qty ? done.qty / goals.qty * 100 : 0;
+  const remaining = Math.max(0, goals.qty - done.qty);
+  const monthEnd = new Date(`${app.month}-01T00:00:00`); monthEnd.setMonth(monthEnd.getMonth() + 1); monthEnd.setDate(0);
+  const daysLeft = Math.max(1, Math.ceil((monthEnd - new Date()) / 86400000) + 1);
+  const perDay = Math.ceil(remaining / daysLeft);
+  const perWeek = perDay * 7;
   return `
     <section class="panel no-print">
       <div class="panel-header"><div><h2>Générer un rapport</h2><p>Export CSV et PDF par impression.</p></div></div>
@@ -1678,6 +1781,15 @@ function renderReports() {
           <label>Fin semaine<input type="date" name="end"></label>
           <div class="toolbar"><button type="button" id="csvBtn">Excel CSV</button><button type="button" class="secondary" id="printBtn">PDF / Imprimer</button></div>
         </form>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><div><h2>Mini résumé global</h2><p>Performance et rythme conseillé pour ${h(app.month)}.</p></div></div>
+      <div class="cards compact-cards">
+        ${card("Objectif global réalisé", `${fmtQty(done.qty)} / ${fmtQty(goals.qty)}`, `${pct.toFixed(1)} %`)}
+        ${card("Fréquence suggérée", remaining ? `${fmtQty(perDay)} / jour` : "Objectif atteint", remaining ? `${fmtQty(perWeek)} par semaine pour couvrir ${fmtQty(remaining)} restants` : "Aucun rattrapage nécessaire")}
+        ${card("Retours emballages", fmtQty(returned.qty), fmtMoney(returned.value))}
+        ${card("Retours de bacs", fmtQty(returnedBacs.qty), `${fmtMoney(returnedBacs.value)} · séparés`)}
       </div>
     </section>
     ${renderObjectives(ids)}
@@ -1691,14 +1803,17 @@ function renderReports() {
 function reportTable(ids, range = null) {
   return `
     <table>
-      <thead><tr><th>Site / axe</th><th class="num">Achats qté</th><th class="num">Achats valeur</th><th class="num">Retours qté</th><th class="num">Retours valeur</th><th class="num">Stock dépôt</th><th class="num">Solde usine</th></tr></thead>
+      <thead><tr><th>Site / axe</th><th class="num">Stock initial Q</th><th class="num">Stock initial V</th><th class="num">Bacs initiaux</th><th class="num">Achats qté</th><th class="num">Achats valeur</th><th class="num">Retours qté</th><th class="num">Retours valeur</th><th class="num">Bacs retournés</th><th class="num">Stock dépôt</th><th class="num">Solde usine</th></tr></thead>
       <tbody>
         ${app.locations.filter((row) => ids.includes(row.id)).map((row) => {
           const p = purchaseSummary([row.id], app.month, range);
           const r = returnSummary([row.id], app.month, range);
           const d = totalForLocation(row.id, "depot");
           const f = totalForLocation(row.id, "factory");
-          return `<tr><td>${h(row.name)}</td><td class="num">${fmtQty(p.qty)}</td><td class="num">${fmtMoney(p.value)}</td><td class="num">${fmtQty(r.qty)}</td><td class="num">${fmtMoney(r.value)}</td><td class="num">${fmtQty(d.qty)}</td><td class="num">${fmtQty(f.qty)}</td></tr>`;
+          const initial = initialTotalForLocation(row.id, "depot");
+          const initialBac = initialBacTotalForLocation(row.id, "depot");
+          const returnedBac = bacReturnSummary([row.id], app.month, range);
+          return `<tr><td>${h(row.name)}</td><td class="num">${fmtQty(initial.qty)}</td><td class="num">${fmtMoney(initial.value)}</td><td class="num bac-row">${fmtQty(initialBac.qty)}</td><td class="num">${fmtQty(p.qty)}</td><td class="num">${fmtMoney(p.value)}</td><td class="num">${fmtQty(r.qty)}</td><td class="num">${fmtMoney(r.value)}</td><td class="num bac-row">${fmtQty(returnedBac.qty)}</td><td class="num">${fmtQty(d.qty)}</td><td class="num">${fmtQty(f.qty)}</td></tr>`;
         }).join("")}
       </tbody>
     </table>
@@ -1971,6 +2086,10 @@ document.addEventListener("change", async (event) => {
     sessionStorage.setItem("depotLocationId", event.target.value);
     render();
   }
+  if (event.target.id === "dailyDate") {
+    sessionStorage.setItem("dailyDate", event.target.value || today());
+    render();
+  }
   if (event.target.closest("#purchaseForm") || event.target.closest("#consignmentForm") || event.target.closest("#financeDepositForm")) {
     syncDynamicForms();
   }
@@ -1986,9 +2105,10 @@ document.addEventListener("input", async (event) => {
   const stock = event.target.closest("[data-stock-scope]");
   if (stock && canEditInitialStock()) {
     const existing = app.initialStocks.find((row) => row.scope === stock.dataset.stockScope && row.location_id === stock.dataset.location && row.bremer_id === stock.dataset.bremer);
-    const field = stock.dataset.stockField || "quantity";
-    if (existing) existing[field] = n(stock.value);
-    else app.initialStocks.push({ scope: stock.dataset.stockScope, location_id: stock.dataset.location, bremer_id: stock.dataset.bremer, quantity: field === "quantity" ? n(stock.value) : 0, value: field === "value" ? n(stock.value) : 0 });
+    if (existing) {
+      existing.quantity = n(stock.value);
+      existing.value = bremerValue(stock.dataset.bremer, existing.quantity);
+    } else app.initialStocks.push({ scope: stock.dataset.stockScope, location_id: stock.dataset.location, bremer_id: stock.dataset.bremer, quantity: n(stock.value), value: bremerValue(stock.dataset.bremer, stock.value) });
     const current = app.initialStocks.find((row) => row.scope === stock.dataset.stockScope && row.location_id === stock.dataset.location && row.bremer_id === stock.dataset.bremer);
     await supabase.from("initial_stocks").upsert({
       scope: stock.dataset.stockScope,
@@ -2002,15 +2122,27 @@ document.addEventListener("input", async (event) => {
   const globalFactory = event.target.closest(".global-factory-input");
   if (globalFactory && canEditInitialStock()) {
     const existing = app.globalFactoryInitial.find((row) => row.bremer_id === globalFactory.dataset.bremer);
-    const field = globalFactory.dataset.field || "quantity";
-    if (existing) existing[field] = n(globalFactory.value);
-    else app.globalFactoryInitial.push({ bremer_id: globalFactory.dataset.bremer, quantity: field === "quantity" ? n(globalFactory.value) : 0, value: field === "value" ? n(globalFactory.value) : 0 });
+    if (existing) {
+      existing.quantity = n(globalFactory.value);
+      existing.value = bremerValue(globalFactory.dataset.bremer, existing.quantity);
+    } else app.globalFactoryInitial.push({ bremer_id: globalFactory.dataset.bremer, quantity: n(globalFactory.value), value: bremerValue(globalFactory.dataset.bremer, globalFactory.value) });
     const current = app.globalFactoryInitial.find((row) => row.bremer_id === globalFactory.dataset.bremer);
     await supabase.from("global_factory_initial").upsert({
       bremer_id: globalFactory.dataset.bremer,
       quantity: n(current?.quantity),
       value: n(current?.value)
     }, { onConflict: "bremer_id" });
+  }
+
+  const dailyInput = event.target.closest(".daily-stock-input");
+  if (dailyInput && isAdmin()) {
+    let current = app.dailyStocks.find((row) => row.date === dailyInput.dataset.date && row.location_id === dailyInput.dataset.location && row.bremer_id === dailyInput.dataset.bremer);
+    if (!current) {
+      current = { date: dailyInput.dataset.date, location_id: dailyInput.dataset.location, bremer_id: dailyInput.dataset.bremer, quantity: 0 };
+      app.dailyStocks.push(current);
+    }
+    current.quantity = n(dailyInput.value);
+    await requireOk(await supabase.from("daily_stocks").upsert({ date: current.date, location_id: current.location_id, bremer_id: current.bremer_id, quantity: current.quantity }, { onConflict: "date,location_id,bremer_id" }));
   }
 
   const objectiveInput = event.target.closest(".objective-input");
@@ -2317,13 +2449,16 @@ function downloadCsv() {
   const data = form ? formObject(form) : {};
   const range = data.type === "weekly" ? { start: data.start, end: data.end } : null;
   const ids = selectedLocationIds();
-  const rows = [["Site / axe", "Achats qté", "Achats valeur", "Retours qté", "Retours valeur", "Stock dépôt qté", "Solde usine qté"]];
+  const rows = [["Site / axe", "Stock initial qté", "Stock initial valeur", "Bacs initiaux", "Achats qté", "Achats valeur", "Retours emballages qté", "Retours emballages valeur", "Retours bacs qté", "Stock dépôt qté", "Solde usine qté"]];
   app.locations.filter((row) => ids.includes(row.id)).forEach((row) => {
     const p = purchaseSummary([row.id], app.month, range);
     const r = returnSummary([row.id], app.month, range);
     const d = totalForLocation(row.id, "depot");
     const f = totalForLocation(row.id, "factory");
-    rows.push([row.name, p.qty, p.value, r.qty, r.value, d.qty, f.qty]);
+    const initial = initialTotalForLocation(row.id, "depot");
+    const initialBac = initialBacTotalForLocation(row.id, "depot");
+    const returnedBac = bacReturnSummary([row.id], app.month, range);
+    rows.push([row.name, initial.qty, initial.value, initialBac.qty, p.qty, p.value, r.qty, r.value, returnedBac.qty, d.qty, f.qty]);
   });
   const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
