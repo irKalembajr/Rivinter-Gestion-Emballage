@@ -89,6 +89,18 @@ Stock Initial vs Stock Emballages Calcule
 
 Un ecart signale une anomalie possible : perte, casse d'emballages, erreur de saisie ou incoherence dans le circuit depot / Brasimba.
 
+Le solde Brasimba du mois est calculé par Bremer :
+
+```text
+Solde = Stock initial usine + Retours du mois + Consignations du mois - Achats globaux du mois
+```
+
+Un solde positif signifie que Brasimba doit des emballages à Rivinter, un solde négatif que Rivinter doit à Brasimba, et un solde nul signale que les emballages disponibles aux dépôts doivent être retournés pour reconstituer une position favorable.
+
+Lorsque le filtre est global, le solde additionne tous les sites et axes et utilise le stock initial global usine. Lorsqu'un site ou axe est sélectionné, seuls son stock initial usine et ses mouvements du mois sont pris en compte.
+
+La gestion journalière est enregistrée avec le bouton `Enregistrer la situation journalière`. Un nouvel enregistrement pour une même date et un même site remplace les quantités précédentes.
+
 ## Configuration du stock initial
 
 1. Ouvrez `Gestion de sites`.

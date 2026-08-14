@@ -318,7 +318,7 @@ td.num, th.num { text-align: right; }
   background: linear-gradient(135deg, #fff, #edf8ff);
 }
 
-.metric-neutral { border-left-color: var(--muted); }
+.metric-neutral { border-left-color: var(--warning); background: #fffdf5; }
 
 .panel, .mini-panel { overflow: hidden; }
 

@@ -399,20 +399,30 @@ function dailyTotal(date, locationId, bacOnly = false) {
 }
 
 function selectionFactoryTotal(ids = selectedLocationIds()) {
-  if (isAdmin() && app.locationFilter === "all") {
-    return packagingBremers().reduce((acc, b) => {
-      const qty = factoryGlobalCurrent(b.id);
-      acc.qty += qty;
-      acc.value += factoryGlobalCurrentValue(b.id);
-      return acc;
-    }, { qty: 0, value: 0 });
-  }
-  return ids.reduce((acc, id) => {
-    const total = totalForLocation(id, "factory");
-    acc.qty += total.qty;
-    acc.value += total.value;
+  return packagingBremers().reduce((acc, b) => {
+    const qty = brasimbaBalanceQty(b.id, ids);
+    acc.qty += qty;
+    acc.value += bremerValue(b.id, qty);
     return acc;
   }, { qty: 0, value: 0 });
+}
+
+function brasimbaBalanceQty(bremerId, ids = selectedLocationIds(), month = app.month) {
+  const allLocationIds = app.locations.map((row) => row.id);
+  const isGlobalSelection = ids.length === allLocationIds.length && allLocationIds.every((id) => ids.includes(id));
+  const initial = isGlobalSelection
+    ? globalFactoryQty(bremerId)
+    : ids.reduce((sum, locationId) => sum + stockQty("factory", locationId, bremerId), 0);
+  const purchases = app.purchases.reduce((sum, row) => ids.includes(row.location_id) && inMonth(row.date, month) && purchaseBremerId(row) === bremerId ? sum + n(row.quantity) : sum, 0);
+  const returns = returnRowsOnly().reduce((sum, row) => ids.includes(row.location_id) && inMonth(row.date, month) && row.bremer_id === bremerId ? sum + n(row.quantity) : sum, 0);
+  const consignments = consignmentRowsOnly().reduce((sum, row) => ids.includes(row.location_id) && inMonth(row.date, month) && row.bremer_id === bremerId ? sum + n(row.quantity) : sum, 0);
+  return initial + returns + consignments - purchases;
+}
+
+function brasimbaStatus(qty) {
+  if (qty > 0) return { label: "Brasimba doit à Rivinter", cardClass: "metric-positive", valueClass: "status-ok", pillClass: "" };
+  if (qty < 0) return { label: "Rivinter doit à Brasimba", cardClass: "metric-negative", valueClass: "status-bad", pillClass: "bad" };
+  return { label: "Solde nul — emballages à retourner", cardClass: "metric-neutral", valueClass: "status-warn", pillClass: "warn" };
 }
 
 function selectionDepositTotal(ids = selectedLocationIds()) {
@@ -771,17 +781,19 @@ function card(label, value, detail, className = "") {
 
 function renderDashboard() {
   const ids = selectedLocationIds();
-  const factory = selectionFactoryTotal(ids);
+  const brasimbaIds = ids;
+  const selectionLabel = app.locationFilter === "all" ? "global" : (loc(ids[0])?.name || "sélection");
+  const factory = selectionFactoryTotal(brasimbaIds);
   const depot = selectionDepositTotal(ids);
   const purchases = purchaseSummary(ids);
   const returns = returnSummary(ids);
   const consignments = consignmentSummary(ids);
   const depotBacs = bacCurrentTotal(ids);
   const factoryBacs = bacCurrentTotal(ids, "factory");
-  const factoryClass = factory.value < 0 ? "metric-negative" : factory.value > 0 ? "metric-positive" : "metric-neutral";
+  const factoryStatus = brasimbaStatus(factory.qty);
   return `
     <div class="cards">
-      ${card("Solde Brasimba global", fmtMoney(factory.value), `${fmtQty(factory.qty)} emballages`, factoryClass)}
+      ${card(`Solde Brasimba — ${selectionLabel}`, fmtMoney(factory.value), `${fmtQty(factory.qty)} emballages · ${factoryStatus.label}`, factoryStatus.cardClass)}
       ${card("Stock dépôts", fmtQty(depot.qty), fmtMoney(depot.value))}
       ${card("Achats du mois", fmtQty(purchases.qty), fmtMoney(purchases.value))}
       ${card("Retours du mois", fmtQty(returns.qty), fmtMoney(returns.value))}
@@ -806,19 +818,16 @@ function renderDashboard() {
         </div>
       </section>
       <section class="panel">
-        <div class="panel-header"><div><h2>Solde Brasimba</h2><p>Initial usine + retours - achats produits.</p></div></div>
+        <div class="panel-header"><div><h2>Solde Brasimba — ${h(selectionLabel)} — ${h(app.month)}</h2><p>Stock initial usine + retours + consignations − achats du mois, uniquement pour le filtre actif.</p></div></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Bremer</th><th class="num">Quantité</th><th class="num">Valeur</th></tr></thead>
+            <thead><tr><th>Bremer</th><th class="num">Quantité</th><th class="num">Valeur</th><th>Statut</th></tr></thead>
             <tbody>
               ${packagingBremers().map((b) => {
-                const qty = isAdmin() && app.locationFilter === "all"
-                  ? factoryGlobalCurrent(b.id)
-                  : ids.reduce((sum, id) => sum + factoryLocationCurrent(id, b.id), 0);
-                const value = isAdmin() && app.locationFilter === "all"
-                  ? factoryGlobalCurrentValue(b.id)
-                  : ids.reduce((sum, id) => sum + factoryLocationCurrentValue(id, b.id), 0);
-                return `<tr><td>${h(b.code)} - ${h(b.label)}</td><td class="num ${qty < 0 ? "status-bad" : ""}">${fmtQty(qty)}</td><td class="num">${fmtMoney(value)}</td></tr>`;
+                const qty = brasimbaBalanceQty(b.id, brasimbaIds);
+                const value = bremerValue(b.id, qty);
+                const status = brasimbaStatus(qty);
+                return `<tr><td>${h(b.code)} - ${h(b.label)}</td><td class="num ${status.valueClass}">${fmtQty(qty)}</td><td class="num ${status.valueClass}">${fmtMoney(value)}</td><td><span class="pill ${status.pillClass}">${status.label}</span></td></tr>`;
               }).join("")}
             </tbody>
           </table>
@@ -883,10 +892,11 @@ function renderDailyManagement() {
   const locations = app.locations.filter((row) => selectedLocationIds().includes(row.id));
   const date = sessionStorage.getItem("dailyDate") || today();
   return `
-    <section class="panel">
+    <form id="dailyStockForm" class="panel">
       <div class="panel-header"><div><h2>Gestion journalière</h2><p>Encodez les quantités physiques en fin de journée. Les valeurs sont automatiques.</p></div><label>Date de situation<input id="dailyDate" type="date" value="${h(date)}"></label></div>
       ${locations.map((location) => dailyLocationPanel(date, location)).join("")}
-    </section>
+      ${isAdmin() ? `<div class="panel-body toolbar"><button type="submit">Enregistrer la situation journalière</button><span class="notice">L'enregistrement remplace les valeurs précédentes de cette date pour les sites affichés.</span></div>` : ""}
+    </form>
     ${renderStockComparison(locations.map((row) => row.id))}
   `;
 }
@@ -2142,7 +2152,6 @@ document.addEventListener("input", async (event) => {
       app.dailyStocks.push(current);
     }
     current.quantity = n(dailyInput.value);
-    await requireOk(await supabase.from("daily_stocks").upsert({ date: current.date, location_id: current.location_id, bremer_id: current.bremer_id, quantity: current.quantity }, { onConflict: "date,location_id,bremer_id" }));
   }
 
   const objectiveInput = event.target.closest(".objective-input");
@@ -2237,6 +2246,20 @@ document.addEventListener("input", async (event) => {
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
+    if (event.target.id === "dailyStockForm" && isAdmin()) {
+      const rows = [...event.target.querySelectorAll(".daily-stock-input")].map((input) => ({
+        date: input.dataset.date,
+        location_id: input.dataset.location,
+        bremer_id: input.dataset.bremer,
+        quantity: n(input.value)
+      }));
+      if (!rows.length) throw new Error("Aucune situation journalière à enregistrer.");
+      await requireOk(await supabase.from("daily_stocks").upsert(rows, { onConflict: "date,location_id,bremer_id" }));
+      await refresh();
+      alert("Situation journalière enregistrée. Les valeurs précédentes de cette date ont été remplacées.");
+      return;
+    }
+
     if (event.target.id === "loginForm") {
       const data = formObject(event.target);
       const result = await supabase.auth.signInWithPassword({ email: data.email, password: data.password });
