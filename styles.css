@@ -350,6 +350,37 @@ td.num, th.num { text-align: right; }
 .panel-body { padding: 16px; }
 .table-wrap { overflow: auto; }
 
+.report-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.report-table {
+  width: 100%;
+  min-width: 1120px;
+  table-layout: auto;
+  font-size: 12px;
+}
+
+.report-table th,
+.report-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 82px;
+}
+
+.report-table th:first-child,
+.report-table td:first-child {
+  min-width: 130px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+
+.gap-panel { border-top: 4px solid var(--warning); }
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));
@@ -532,8 +563,13 @@ td.num, th.num { text-align: right; }
 }
 
 @media print {
+  @page { size: landscape; margin: 8mm; }
   .sidebar, .topbar, .no-print, button { display: none !important; }
   .app { display: block; }
   .content { padding: 0; }
   .panel, .card { box-shadow: none; break-inside: avoid; }
+  .report-table-wrap { overflow: visible; }
+  .report-table { min-width: 0; font-size: 9px; table-layout: fixed; }
+  .report-table th:first-child, .report-table td:first-child { position: static; }
+  .report-table th, .report-table td { min-width: 0; padding: 5px 3px; }
 }

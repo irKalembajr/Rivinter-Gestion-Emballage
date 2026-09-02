@@ -19,14 +19,11 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 const NAV_ITEMS = [
-  { id: "dashboard", label: "Dashboard", subtitle: "Vue globale des stocks, achats, retours et audits." },
-  { id: "sites", label: "Gestion de sites", subtitle: "Stocks initiaux au dépôt, à l'usine et objectifs d'achat." },
-  { id: "daily", label: "Gestion journalière", subtitle: "Situation quotidienne des emballages par site et axe." },
+  { id: "dashboard", label: "Dashboard", subtitle: "Vue globale des mouvements d'emballages entre Brasimba et Rivinter." },
+  { id: "sites", label: "Gestion de sites", subtitle: "Stocks initiaux et objectifs mensuels en quantité." },
   { id: "purchases", label: "Achats produits", subtitle: "Produits Brasimba achetés par site ou par axe." },
   { id: "returns", label: "Retour emballages", subtitle: "Déconsignations envoyées à Brasimba par type de Bremer." },
-  { id: "audit", label: "Audit", subtitle: "Résultat mensuel par site selon caisse, produits, dépenses et banque." },
-  { id: "finance", label: "Suivi finance", subtitle: "Versements bancaires, consignations, dettes et paiements entre sites." },
-  { id: "capital", label: "Suivi capital", subtitle: "Valeur produits, caisse, dettes, plafond de crédit et valeur nette Rivinter." },
+  { id: "consignments", label: "Consignation", subtitle: "Consignations d'emballages et de bouteilles contrôlées par BV." },
   { id: "reports", label: "Reporting", subtitle: "Rapports hebdomadaires, mensuels, Excel et PDF." },
   { id: "accounts", label: "Gestion comptes", subtitle: "Rôles, affectations et sécurité." }
 ];
@@ -43,6 +40,14 @@ const PAYMENT_TYPES = {
   payer: "Payer",
   ordre_virement: "Ordre de virement"
 };
+
+const BOTTLE_TYPES = [
+  { id: "B65", label: "Bouteilles 65Cl", bottlesPerCase: 12, unitPrice: 1000 },
+  { id: "ALE50", label: "Bouteilles 50Cl", bottlesPerCase: 20, unitPrice: 1000 },
+  { id: "B33N", label: "Bouteilles 33Cl Noir", bottlesPerCase: 24, unitPrice: 500 },
+  { id: "B33V", label: "Bouteilles 33Cl Vert", bottlesPerCase: 24, unitPrice: 500 },
+  { id: "B30CL", label: "Bouteilles 30Cl", bottlesPerCase: 24, unitPrice: 500 }
+];
 
 const ROLE_LABELS = {
   principal_admin: "Administrateur principal",
@@ -172,7 +177,11 @@ function purchaseUnitPrice(row) {
 }
 
 function isConsignment(row) {
-  return row.movement_type === "consignment";
+  return row.movement_type === "consignment" || row.movement_type === "bottle_consignment";
+}
+
+function isBottleConsignment(row) {
+  return row.movement_type === "bottle_consignment";
 }
 
 function returnRowsOnly() {
@@ -192,8 +201,8 @@ function bankAccountId(bankName, accountName) {
 }
 
 function allowedBankAccounts(locationId, purpose = "versement") {
-  if (purpose === "consignation" || purpose === "payment") return BANK_ACCOUNTS;
-  return BANK_ACCOUNTS.filter((row) => row.locations.includes(locationId) && (purpose === "consignation" ? row.brasimba : true));
+  if (["consignation", "consignation_bouteilles", "payment"].includes(purpose)) return BANK_ACCOUNTS;
+  return BANK_ACCOUNTS.filter((row) => row.locations.includes(locationId));
 }
 
 function bankAccountAllowed(locationId, accountId, purpose = "versement") {
@@ -249,7 +258,7 @@ function purchaseValue(row) {
 }
 
 function returnValue(row) {
-  return bremerValue(row.bremer_id, row.quantity);
+  return n(row.amount) || bremerValue(row.bremer_id, row.quantity);
 }
 
 function movementValue(row) {
@@ -304,20 +313,33 @@ function sumConsignmentValueByBremer(bremerId, locationId = null) {
   return consignmentRowsOnly().reduce((sum, row) => {
     if (row.bremer_id !== bremerId) return sum;
     if (locationId && row.location_id !== locationId) return sum;
-    return sum + returnValue(row);
+    // Une consignation de bouteilles est payée à la bouteille, mais le solde
+    // Brasimba reçoit la valeur emballage des casiers effectivement constitués.
+    return sum + (isBottleConsignment(row) ? bremerValue(row.bremer_id, row.quantity) : returnValue(row));
   }, 0);
 }
 
 function depositCurrent(locationId, bremerId) {
+  const bottlesUsedBacs = isBac(bremerId) ? sumBottleConsignmentCases(locationId) : 0;
   return stockQty("depot", locationId, bremerId)
     + sumPurchasesByBremer(bremerId, locationId)
-    - sumReturnsByBremer(bremerId, locationId);
+    - sumReturnsByBremer(bremerId, locationId)
+    - bottlesUsedBacs;
 }
 
 function depositCurrentValue(locationId, bremerId) {
+  const bottlesUsedValue = isBac(bremerId) ? bremerValue(bremerId, sumBottleConsignmentCases(locationId)) : 0;
   return stockValue("depot", locationId, bremerId)
     + sumPurchasePackagingValueByBremer(bremerId, locationId)
-    - sumReturnValueByBremer(bremerId, locationId);
+    - sumReturnValueByBremer(bremerId, locationId)
+    - bottlesUsedValue;
+}
+
+function sumBottleConsignmentCases(locationId = null) {
+  return app.returns.reduce((sum, row) => {
+    if (!isBottleConsignment(row) || (locationId && row.location_id !== locationId)) return sum;
+    return sum + n(row.quantity);
+  }, 0);
 }
 
 function factoryLocationCurrent(locationId, bremerId) {
@@ -367,7 +389,7 @@ function totalForLocation(locationId, source) {
 function initialTotalForLocation(locationId, scope = "depot") {
   return packagingBremers().reduce((acc, b) => {
     acc.qty += stockQty(scope, locationId, b.id);
-    acc.value += bremerValue(b.id, stockQty(scope, locationId, b.id));
+    acc.value += stockValue(scope, locationId, b.id);
     return acc;
   }, { qty: 0, value: 0 });
 }
@@ -485,6 +507,23 @@ function consignmentSummary(ids = selectedLocationIds(), month = app.month) {
       acc.value += returnValue(row);
       return acc;
     }, { qty: 0, value: 0 });
+}
+
+function consignmentBvCalculatedValue(row) {
+  const bvNumber = row.bv_number || row.ref;
+  return consignmentRowsOnly()
+    .filter((item) => item.location_id === row.location_id)
+    .filter((item) => item.date === row.date && (item.bv_number || item.ref) === bvNumber)
+    .reduce((sum, item) => sum + returnValue(item), 0);
+}
+
+function monthlyGapBySite(ids = selectedLocationIds(), month = app.month, range = null) {
+  return app.locations.filter((row) => ids.includes(row.id)).map((row) => {
+    const purchases = purchaseSummary([row.id], month, range);
+    const returns = returnSummary([row.id], month, range);
+    const gap = purchases.qty - returns.qty;
+    return { location: row, purchases, returns, gap };
+  });
 }
 
 function objective(locationId) {
@@ -753,12 +792,9 @@ function render() {
   const renderers = {
     dashboard: renderDashboard,
     sites: renderSites,
-    daily: renderDailyManagement,
     purchases: renderPurchases,
     returns: renderReturns,
-    audit: renderAudit,
-    finance: renderFinance,
-    capital: renderCapital,
+    consignments: renderConsignments,
     reports: renderReports,
     accounts: renderAccounts
   };
@@ -917,13 +953,13 @@ function renderObjectives(ids = selectedLocationIds()) {
       <div class="panel-header"><div><h2>Objectifs d'achats</h2><p>Progression du mois ${h(app.month)}.</p></div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Site / axe</th><th class="num">Objectif qté</th><th class="num">Réalisé qté</th><th>Progression</th><th class="num">Objectif valeur</th><th class="num">Réalisé valeur</th></tr></thead>
+          <thead><tr><th>Site / axe</th><th class="num">Objectif qté</th><th class="num">Réalisé qté</th><th>Progression</th></tr></thead>
           <tbody>
             ${app.locations.filter((row) => ids.includes(row.id)).map((row) => {
               const obj = objective(row.id);
               const done = purchaseSummary([row.id]);
               const pct = obj.qty ? Math.min(100, done.qty / obj.qty * 100) : 0;
-              return `<tr><td>${h(row.name)}</td><td class="num">${fmtQty(obj.qty)}</td><td class="num">${fmtQty(done.qty)}</td><td><div class="progress"><span style="width:${pct}%"></span></div></td><td class="num">${fmtMoney(obj.value)}</td><td class="num">${fmtMoney(done.value)}</td></tr>`;
+              return `<tr><td>${h(row.name)}</td><td class="num">${fmtQty(obj.qty)}</td><td class="num">${fmtQty(done.qty)}</td><td><div class="progress"><span style="width:${pct}%"></span></div></td></tr>`;
             }).join("")}
           </tbody>
         </table>
@@ -941,7 +977,7 @@ function renderSites() {
       <div class="panel-header">
         <div>
           <h2>Constante Stock Initial</h2>
-          <p>Le stock initial est le point de référence immuable de l'audit. Il possède une quantité Q et une valeur V.</p>
+          <p>Le stock initial est la référence des mouvements. Sa valeur est calculée automatiquement depuis la quantité.</p>
         </div>
         <span class="pill ${locked ? "" : "warn"}">${locked ? "Verrouillé" : "Configuration ouverte"}</span>
       </div>
@@ -954,11 +990,11 @@ function renderSites() {
       <div class="panel-header"><div><h2>Objectifs mensuels</h2><p>Mois sélectionné: ${h(app.month)}.</p></div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Site / axe</th><th class="num">Objectif quantité</th><th class="num">Objectif valeur</th></tr></thead>
+          <thead><tr><th>Site / axe</th><th class="num">Objectif quantité</th></tr></thead>
           <tbody>
             ${locations.map((row) => {
               const obj = objective(row.id);
-              return `<tr><td>${h(row.name)}</td><td><input class="objective-input" data-location="${row.id}" data-field="qty" value="${h(obj.qty)}" ${isAdmin() ? "" : "disabled"}></td><td><input class="objective-input" data-location="${row.id}" data-field="value" value="${h(obj.value)}" ${isAdmin() ? "" : "disabled"}></td></tr>`;
+              return `<tr><td>${h(row.name)}</td><td><input class="objective-input" data-location="${row.id}" data-field="qty" value="${h(obj.qty)}" ${isAdmin() ? "" : "disabled"}></td></tr>`;
             }).join("")}
           </tbody>
         </table>
@@ -1131,39 +1167,20 @@ function currentObjectiveProductId() {
 function renderPurchaseObjectives(ids) {
   const globalTarget = globalObjectiveTotals(ids);
   const globalDone = purchaseSummary(ids);
-  const selectedProductId = currentObjectiveProductId();
-  const selectedProduct = product(selectedProductId);
-  const selectedProductTarget = productObjectiveTotal(ids, selectedProductId);
-  const selectedProductDone = productPurchaseTotal(ids, selectedProductId);
   const globalPct = globalTarget.qty ? Math.min(100, globalDone.qty / globalTarget.qty * 100) : 0;
-  const productPct = selectedProductTarget ? Math.min(100, selectedProductDone / selectedProductTarget * 100) : 0;
   const globalLabel = isAdmin() && app.locationFilter === "all" ? "Objectif global Rivinter" : "Objectif sélection";
   const globalDetail = isAdmin() && app.locationFilter === "all" ? "Somme des objectifs quantités par site" : "Selon le site ou filtre choisi";
   return `
     <div class="cards">
       ${card(globalLabel, fmtQty(globalTarget.qty), globalDetail)}
       ${card("Réalisé global", fmtQty(globalDone.qty), `${globalPct.toFixed(1)}% de l'objectif global`)}
-      ${card(`Objectif ${selectedProduct?.name || "produit"}`, fmtQty(selectedProductTarget), "Somme des objectifs du produit")}
-      ${card("Réalisé produit", fmtQty(selectedProductDone), `${productPct.toFixed(1)}% du produit sélectionné`)}
     </div>
     <section class="panel">
       <div class="panel-header">
-        <div><h2>Objectifs achats</h2><p>Quantité globale par site et qualité par produit. Le total Rivinter est calculé automatiquement par somme des sites.</p></div>
-        <label>Produit suivi
-          <select id="objectiveProductId">
-            ${app.products.map((row) => `<option value="${row.id}" ${row.id === selectedProductId ? "selected" : ""}>${h(row.name)} / ${h(bremer(row.bremer_id)?.code)}</option>`).join("")}
-          </select>
-        </label>
+        <div><h2>Objectifs achats</h2><p>Objectifs mensuels en quantité uniquement. Le total Rivinter est la somme des sites.</p></div>
       </div>
       ${isAdmin() ? `<div class="readonly">Saisie administrateur: renseignez les objectifs par site. Les utilisateurs voient seulement la progression.</div>` : ""}
-      <div class="split">
-        <div class="table-wrap">${globalObjectiveEditTable(ids)}</div>
-        <div class="table-wrap">${productObjectiveEditTable(ids, selectedProductId)}</div>
-      </div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><div><h2>Résumé objectifs par produit</h2><p>Objectifs qualité et réalisations du mois ${h(app.month)}.</p></div></div>
-      <div class="table-wrap">${productObjectiveSummaryTable(ids)}</div>
+      <div class="table-wrap">${globalObjectiveEditTable(ids)}</div>
     </section>
   `;
 }
@@ -1280,17 +1297,17 @@ function purchaseTable(rows) {
 
 function renderReturns() {
   const ids = selectedLocationIds();
-  const rows = app.returns.filter((row) => ids.includes(row.location_id) && inMonth(row.date));
+  const rows = returnRowsOnly().filter((row) => ids.includes(row.location_id) && inMonth(row.date));
   return `
-    ${isAdmin() ? returnForms() : `<div class="readonly">Lecture seule: vous consultez uniquement les retours et consignations de votre site affecté.</div>`}
+    ${isAdmin() ? returnForm() : `<div class="readonly">Lecture seule: vous consultez uniquement les retours de votre site affecté.</div>`}
     <section class="panel">
-      <div class="panel-header"><div><h2>Retours et consignations</h2><p>Les retours diminuent le dépôt. Les consignations augmentent seulement le solde Brasimba du site acheteur.</p></div></div>
+      <div class="panel-header"><div><h2>Retours emballages</h2><p>Les retours diminuent le stock du dépôt et augmentent le solde Brasimba du site.</p></div></div>
       <div class="table-wrap">${returnTable(rows)}</div>
     </section>
   `;
 }
 
-function returnForms() {
+function returnForm() {
   return `
     <section class="panel">
       <div class="panel-header"><div><h2>Nouveau retour</h2><p>Un bordereau peut contenir plusieurs types de Bremers.</p></div></div>
@@ -1309,15 +1326,31 @@ function returnForms() {
           <button type="submit">Enregistrer</button>
         </form>
       </div>
-    </section>
+    </section>`;
+}
+
+function renderConsignments() {
+  const ids = selectedLocationIds();
+  const rows = consignmentRowsOnly().filter((row) => ids.includes(row.location_id) && inMonth(row.date));
+  return `
+    ${isAdmin() ? consignmentForms() : `<div class="readonly">Lecture seule: vous consultez uniquement les consignations de votre site affecté.</div>`}
     <section class="panel">
-      <div class="panel-header"><div><h2>Consignation</h2><p>Achat d'emballages payé directement sur compte Brasimba. Le montant des Bremers doit correspondre au bordereau finance.</p></div></div>
+      <div class="panel-header"><div><h2>Historique des consignations</h2><p>Le montant du BV est contrôlé contre la valeur calculée de chaque consignation.</p></div></div>
+      <div class="table-wrap">${returnTable(rows)}</div>
+    </section>
+  `;
+}
+
+function consignmentForms() {
+  return `
+    <section class="panel">
+      <div class="panel-header"><div><h2>Consignation emballages</h2><p>La valeur calculée des Bremers doit être identique au montant saisi sur le BV.</p></div></div>
       <div class="panel-body">
         <form id="consignmentForm" class="form-grid">
           <label>Date<input type="date" name="date" required value="${today()}"></label>
           <label>Site acheteur<select name="location_id" required>${app.locations.map((row) => `<option value="${row.id}">${h(row.name)}</option>`).join("")}</select></label>
-          <label>Bordereau finance<select name="bank_deposit_id" required>${consignmentDepositOptions()}</select></label>
-          <label>Référence<input name="ref" placeholder="N° bordereau Brasimba"></label>
+          <label>Numéro du BV<input name="bv_number" required placeholder="N° BV"></label>
+          <label>Montant du BV<input name="bv_amount" inputmode="numeric" required></label>
           <div class="span-4 line-editor">
             <div class="line-editor-head"><strong>Bremers consignés</strong><button type="button" class="secondary" data-add-consignment-line>Ajouter Bremer</button></div>
             <div id="consignmentLines" class="line-list">
@@ -1327,6 +1360,21 @@ function returnForms() {
           </div>
           <label class="span-2">Note<input name="note" placeholder="Observation"></label>
           <button type="submit">Enregistrer consignation</button>
+        </form>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><div><h2>Consignation bouteilles</h2><p>Les bouteilles constituent des casiers complets. Chaque casier utilise un bac du site et entre dans le solde d'emballages Brasimba.</p></div></div>
+      <div class="panel-body">
+        <form id="bottleConsignmentForm" class="form-grid">
+          <label>Date<input type="date" name="date" required value="${today()}"></label>
+          <label>Site acheteur<select name="location_id" required>${app.locations.map((row) => `<option value="${row.id}">${h(row.name)}</option>`).join("")}</select></label>
+          <label>Numéro du BV<input name="bv_number" required placeholder="N° BV"></label>
+          <label>Montant du BV<input name="bv_amount" inputmode="numeric" required></label>
+          <label>Type de bouteille<select name="bottle_type" required>${BOTTLE_TYPES.map((row) => `<option value="${row.id}">${h(row.label)} — ${fmtMoney(row.unitPrice)} / bouteille — ${row.bottlesPerCase} / casier</option>`).join("")}</select></label>
+          <label>Nombre de bouteilles<input name="bottle_quantity" inputmode="numeric" required></label>
+          <label class="span-2">Note<input name="note" placeholder="Observation"></label>
+          <button type="submit">Enregistrer consignation bouteilles</button>
         </form>
       </div>
     </section>
@@ -1344,17 +1392,12 @@ function bremerLineHtml(index, mode) {
   `;
 }
 
-function consignmentDepositOptions() {
-  const rows = app.financeDeposits.filter((row) => row.purpose === "consignation" && inMonth(row.date));
-  return rows.map((row) => `<option value="${row.id}">${h(row.bordereau_no)} - ${h(loc(row.location_id)?.name)} - ${h(row.bank_name)} ${h(row.account_name)} - ${fmtMoney(row.amount)}</option>`).join("") || `<option value="">Aucun bordereau consignation dans Suivi finance</option>`;
-}
-
 function returnTable(rows) {
   return `
     <table>
       <thead><tr><th>Date</th><th>Type</th><th>Référence</th><th>Site / axe</th><th>Bremer</th><th class="num">Quantité</th><th class="num">Bordereau</th><th class="num">Écart</th><th class="num">Valeur</th><th>Action</th></tr></thead>
       <tbody>
-        ${rows.map((row) => `<tr><td>${h(row.date)}</td><td><span class="pill ${isConsignment(row) ? "warn" : "neutral"}">${isConsignment(row) ? "Consignation" : "Retour"}</span></td><td>${h(row.ref || "-")}</td><td>${h(loc(row.location_id)?.name)}</td><td>${h(bremer(row.bremer_id)?.code)}</td><td class="num">${fmtQty(row.quantity)}</td><td class="num">${isConsignment(row) ? "-" : fmtQty(row.shipped_qty)}</td><td class="num ${!isConsignment(row) && returnGap(row) ? "status-warn" : ""}">${isConsignment(row) ? "-" : fmtQty(returnGap(row))}</td><td class="num">${fmtMoney(returnValue(row))}</td><td>${isAdmin() ? `<button class="danger" data-delete="packaging_returns:${row.id}">Supprimer</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="10">Aucun retour pour la sélection.</td></tr>`}
+        ${rows.map((row) => `<tr><td>${h(row.date)}</td><td><span class="pill ${isConsignment(row) ? "warn" : "neutral"}">${isBottleConsignment(row) ? "Consignation bouteilles" : isConsignment(row) ? "Consignation emballages" : "Retour"}</span></td><td>${h(row.bv_number || row.ref || "-")}</td><td>${h(loc(row.location_id)?.name)}</td><td>${h(bremer(row.bremer_id)?.code)}${isBottleConsignment(row) ? ` (${fmtQty(row.bottle_quantity)} bouteilles)` : ""}</td><td class="num">${fmtQty(row.quantity)}</td><td class="num">${isConsignment(row) ? fmtMoney(row.bv_amount || row.amount) : fmtQty(row.shipped_qty)}</td><td class="num ${!isConsignment(row) && returnGap(row) ? "status-warn" : ""}">${isConsignment(row) ? (Math.round(n(row.bv_amount || row.amount)) === Math.round(consignmentBvCalculatedValue(row)) ? "Conforme" : "Écart BV") : fmtQty(returnGap(row))}</td><td class="num">${fmtMoney(returnValue(row))}</td><td>${isAdmin() ? `<button class="danger" data-delete="packaging_returns:${row.id}">Supprimer</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="10">Aucun mouvement pour la sélection.</td></tr>`}
       </tbody>
     </table>
   `;
@@ -1487,7 +1530,7 @@ function financeMetrics(locationId) {
   const loansIn = app.financeLoans.filter((row) => row.borrower_location_id === locationId && row.month === app.month);
   const loansOut = app.financeLoans.filter((row) => row.lender_location_id === locationId && row.month === app.month);
   const bankIn = deposits.filter((row) => row.purpose === "versement").reduce((sum, row) => sum + n(row.amount), 0);
-  const brasimbaPayments = deposits.filter((row) => row.purpose === "achat_direct" || row.purpose === "consignation").reduce((sum, row) => sum + n(row.amount), 0);
+  const brasimbaPayments = deposits.filter((row) => ["achat_direct", "consignation", "consignation_bouteilles"].includes(row.purpose)).reduce((sum, row) => sum + n(row.amount), 0);
   const purchases = purchaseSummary([locationId]).value;
   const borrowed = loansIn.reduce((sum, row) => sum + n(row.amount), 0);
   const lent = loansOut.reduce((sum, row) => sum + n(row.amount), 0);
@@ -1565,7 +1608,7 @@ function renderFinanceForms() {
           <form id="financeDepositForm" class="form-grid two">
             <label>Date<input type="date" name="date" required value="${today()}"></label>
             <label>Site / axe<select name="location_id" required>${app.locations.map((row) => `<option value="${row.id}">${h(row.name)}</option>`).join("")}</select></label>
-            <label>Motif<select name="purpose"><option value="versement">Versement normal</option><option value="achat_direct">Achat direct / commande</option><option value="consignation">Consignation emballages</option><option value="autre">Autre</option></select></label>
+            <label>Motif<select name="purpose"><option value="versement">Versement normal</option><option value="achat_direct">Achat direct / commande</option><option value="consignation">Consignation emballages</option><option value="consignation_bouteilles">Consignation bouteilles</option><option value="autre">Autre</option></select></label>
             <label>Compte bancaire<select name="account_id" required>${financeAccountOptions(app.locations[0]?.id, "versement")}</select></label>
             <label>Montant Fc<input name="amount" inputmode="numeric" required></label>
             <label>N° bordereau<input name="bordereau_no" required></label>
@@ -1775,6 +1818,8 @@ function renderReports() {
   const done = purchaseSummary(ids);
   const returned = returnSummary(ids);
   const returnedBacs = bacReturnSummary(ids);
+  const gaps = monthlyGapBySite(ids);
+  const globalGap = gaps.reduce((sum, row) => sum + row.gap, 0);
   const pct = goals.qty ? done.qty / goals.qty * 100 : 0;
   const remaining = Math.max(0, goals.qty - done.qty);
   const monthEnd = new Date(`${app.month}-01T00:00:00`); monthEnd.setMonth(monthEnd.getMonth() + 1); monthEnd.setDate(0);
@@ -1800,19 +1845,29 @@ function renderReports() {
         ${card("Fréquence suggérée", remaining ? `${fmtQty(perDay)} / jour` : "Objectif atteint", remaining ? `${fmtQty(perWeek)} par semaine pour couvrir ${fmtQty(remaining)} restants` : "Aucun rattrapage nécessaire")}
         ${card("Retours emballages", fmtQty(returned.qty), fmtMoney(returned.value))}
         ${card("Retours de bacs", fmtQty(returnedBacs.qty), `${fmtMoney(returnedBacs.value)} · séparés`)}
+        ${card("Écart du mois", fmtQty(globalGap), globalGap > 0 ? "Casiers encore à retourner" : globalGap < 0 ? "Retours supérieurs aux achats" : "Achats et retours équilibrés")}
+      </div>
+    </section>
+    <section class="panel gap-panel">
+      <div class="panel-header"><div><h2>Écart du mois par site</h2><p>Écart = achats globaux du mois − retours emballages du mois. Un écart positif indique ce que le site doit encore retourner.</p></div></div>
+      <div class="table-wrap report-table-wrap">
+        <table class="report-table">
+          <thead><tr><th>Site / axe</th><th class="num">Achats</th><th class="num">Retours</th><th class="num">Écart</th><th>Lecture</th></tr></thead>
+          <tbody>${gaps.map((row) => `<tr><td>${h(row.location.name)}</td><td class="num">${fmtQty(row.purchases.qty)}</td><td class="num">${fmtQty(row.returns.qty)}</td><td class="num ${row.gap > 0 ? "status-warn" : "status-ok"}">${fmtQty(row.gap)}</td><td>${row.gap > 0 ? `Doit encore retourner ${fmtQty(row.gap)} casier(s)` : row.gap < 0 ? `A envoyé ${fmtQty(Math.abs(row.gap))} casier(s) de plus` : "Équilibré"}</td></tr>`).join("")}</tbody>
+        </table>
       </div>
     </section>
     ${renderObjectives(ids)}
     <section class="panel">
       <div class="panel-header"><div><h2>Résumé ${h(app.month)}</h2><p>Selon le filtre actuel.</p></div></div>
-      <div class="table-wrap">${reportTable(ids)}</div>
+      <div class="table-wrap report-table-wrap">${reportTable(ids)}</div>
     </section>
   `;
 }
 
 function reportTable(ids, range = null) {
   return `
-    <table>
+    <table class="report-table">
       <thead><tr><th>Site / axe</th><th class="num">Stock initial Q</th><th class="num">Stock initial V</th><th class="num">Bacs initiaux</th><th class="num">Achats qté</th><th class="num">Achats valeur</th><th class="num">Retours qté</th><th class="num">Retours valeur</th><th class="num">Bacs retournés</th><th class="num">Stock dépôt</th><th class="num">Solde usine</th></tr></thead>
       <tbody>
         ${app.locations.filter((row) => ids.includes(row.id)).map((row) => {
@@ -2319,31 +2374,57 @@ document.addEventListener("submit", async (event) => {
 
     if (event.target.id === "consignmentForm" && isAdmin()) {
       const data = formObject(event.target);
-      const deposit = app.financeDeposits.find((row) => row.id === data.bank_deposit_id);
-      if (!deposit) throw new Error("Bordereau de consignation introuvable dans Suivi finance.");
-      if (deposit.location_id !== data.location_id) throw new Error("Le site sélectionné ne correspond pas au site du bordereau finance.");
-      if (deposit.purpose !== "consignation") throw new Error("Le bordereau finance doit avoir le motif Consignation.");
-      const account = bankAccountId(deposit.bank_name, deposit.account_name);
-      if (!bankAccountAllowed(data.location_id, account, "consignation")) throw new Error("Le compte bancaire du bordereau n'est pas un compte Brasimba autorisé pour ce site.");
       const lines = lineData(event.target, ".consignment-line");
       if (!lines.length) throw new Error("Ajoutez au moins un Bremer à la consignation.");
       const total = lines.reduce((sum, line) => sum + bremerValue(line.bremerId, line.qty), 0);
-      if (Math.round(total) !== Math.round(n(deposit.amount))) {
-        throw new Error(`Vérifiez les quantités: total emballages ${fmtMoney(total)} différent du bordereau ${fmtMoney(deposit.amount)}.`);
+      if (!String(data.bv_number || "").trim()) throw new Error("Saisissez le numéro du BV.");
+      if (Math.round(total) !== Math.round(n(data.bv_amount))) {
+        throw new Error(`Vérifiez les quantités: total emballages ${fmtMoney(total)} différent du BV ${fmtMoney(data.bv_amount)}.`);
       }
       const rows = lines.map((line) => ({
         date: data.date,
-        ref: data.ref || deposit.bordereau_no,
+        ref: data.bv_number,
+        bv_number: data.bv_number,
+        bv_amount: n(data.bv_amount),
         location_id: data.location_id,
         bremer_id: line.bremerId,
         quantity: line.qty,
         shipped_qty: 0,
         movement_type: "consignment",
-        bank_deposit_id: deposit.id,
         amount: bremerValue(line.bremerId, line.qty),
         note: data.note
       }));
       await requireOk(await supabase.from("packaging_returns").insert(rows));
+      await refresh();
+      return;
+    }
+
+    if (event.target.id === "bottleConsignmentForm" && isAdmin()) {
+      const data = formObject(event.target);
+      const bottleType = BOTTLE_TYPES.find((row) => row.id === data.bottle_type);
+      const bottleQty = n(data.bottle_quantity);
+      if (!String(data.bv_number || "").trim()) throw new Error("Saisissez le numéro du BV.");
+      if (!bottleType || bottleQty <= 0) throw new Error("Sélectionnez un type et un nombre de bouteilles valide.");
+      if (bottleQty % bottleType.bottlesPerCase !== 0) throw new Error(`${bottleType.label}: le nombre doit être un multiple de ${bottleType.bottlesPerCase} pour constituer des casiers complets.`);
+      const cases = bottleQty / bottleType.bottlesPerCase;
+      const availableBacs = depositCurrent(data.location_id, "BAC");
+      if (cases > availableBacs) throw new Error(`Parc de bacs insuffisant: ${fmtQty(availableBacs)} disponible(s), ${fmtQty(cases)} requis.`);
+      const total = bottleQty * bottleType.unitPrice;
+      if (Math.round(total) !== Math.round(n(data.bv_amount))) throw new Error(`Total bouteilles ${fmtMoney(total)} différent du BV ${fmtMoney(data.bv_amount)}.`);
+      await requireOk(await supabase.from("packaging_returns").insert({
+        date: data.date,
+        ref: data.bv_number,
+        bv_number: data.bv_number,
+        bv_amount: n(data.bv_amount),
+        location_id: data.location_id,
+        bremer_id: bottleType.id,
+        quantity: cases,
+        shipped_qty: 0,
+        movement_type: "bottle_consignment",
+        amount: total,
+        bottle_quantity: bottleQty,
+        note: data.note
+      }));
       await refresh();
       return;
     }

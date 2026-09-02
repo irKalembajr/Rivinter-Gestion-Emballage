@@ -150,6 +150,8 @@ create table if not exists public.packaging_returns (
   shipped_qty numeric not null default 0,
   movement_type text not null default 'return' check (movement_type in ('return', 'consignment')),
   bank_deposit_id uuid,
+  bv_number text,
+  bv_amount numeric not null default 0,
   amount numeric not null default 0,
   note text,
   created_by uuid references auth.users(id) default auth.uid(),
@@ -158,7 +160,10 @@ create table if not exists public.packaging_returns (
 
 alter table public.packaging_returns add column if not exists movement_type text not null default 'return';
 alter table public.packaging_returns add column if not exists bank_deposit_id uuid;
+alter table public.packaging_returns add column if not exists bv_number text;
+alter table public.packaging_returns add column if not exists bv_amount numeric not null default 0;
 alter table public.packaging_returns add column if not exists amount numeric not null default 0;
+alter table public.packaging_returns add column if not exists bottle_quantity numeric not null default 0;
 
 create table if not exists public.audits (
   id uuid primary key default gen_random_uuid(),
@@ -261,10 +266,14 @@ create table if not exists public.capital_settings (
 
 alter table public.packaging_returns drop constraint if exists packaging_returns_movement_type_check;
 alter table public.packaging_returns add constraint packaging_returns_movement_type_check
-check (movement_type in ('return', 'consignment'));
+check (movement_type in ('return', 'consignment', 'bottle_consignment'));
 alter table public.packaging_returns drop constraint if exists packaging_returns_bank_deposit_id_fkey;
 alter table public.packaging_returns add constraint packaging_returns_bank_deposit_id_fkey
 foreign key (bank_deposit_id) references public.finance_deposits(id) on delete set null;
+
+alter table public.finance_deposits drop constraint if exists finance_deposits_purpose_check;
+alter table public.finance_deposits add constraint finance_deposits_purpose_check
+check (purpose in ('versement', 'achat_direct', 'consignation', 'consignation_bouteilles', 'autre'));
 
 create table if not exists public.app_events (
   id uuid primary key default gen_random_uuid(),

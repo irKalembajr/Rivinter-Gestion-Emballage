@@ -1,258 +1,74 @@
-# RIVINTER SARLU - Gestion des emballages
+# Rivinter — mise à jour du 2 septembre 2026
 
-Application web prete pour GitHub + Vercel, avec base de donnees et authentification Supabase.
+Application Vite / JavaScript, Supabase et fonction serveur Vercel.
 
-## Modules inclus
+## Envoyer sur GitHub
 
-- Dashboard global des emballages
-- Gestion des sites et axes
-- Stock initial depot et usine Brasimba en constante Q/V
-- Gestion emballages depot : repere mensuel par site, emballages + produits convertis en Bremers
-- Achats produits Brasimba
-- Achats produits multi-lignes par commande
-- Objectifs achats par quantite globale de site et par qualite/produit
-- Retours / deconsignations emballages multi-lignes avec gestion du Bac vide
-- Consignation emballages reliee aux bordereaux finance, avec choix parmi tous les comptes bancaires
-- Audit mensuel saisissable par les utilisateurs affectes
-- Suivi finance : versements, consignations, comptes bancaires, dettes et paiements Brasimba
-- Suivi capital : valeur produits, caisse, dettes, plafond de credit et valeur nette
-- Reporting CSV et impression PDF
-- Gestion des comptes
-- Reinitialisation reservee uniquement au compte `principal_admin`
-- Comparaison Stock Initial vs Stock Calcule pour detecter anomalies, pertes, casses ou erreurs de saisie
+Décompressez l'archive et envoyez son contenu à la racine du dépôt GitHub. `package.json`, `index.html`, `main.js`, `styles.css` et `vercel.json` doivent être à la racine, avec les dossiers `api`, `public` et `supabase`.
 
-## Architecture
+Ne publiez jamais de vrai fichier `.env` ni de clé privée. `.env.example` contient uniquement des exemples. Le fichier JavaScript actif est `main.js` à la racine. La copie ancienne du dossier `src` n'est pas incluse.
 
-- Frontend : Vite + JavaScript
-- Hebergement : Vercel
-- Base de donnees : Supabase Postgres
-- Authentification : Supabase Auth email + mot de passe
-- Creation des utilisateurs : fonction serveur Vercel `/api/invite-user`
+## Mise à jour de la base existante
 
-## Roles
+1. Sauvegardez la base Supabase avant toute migration.
+2. Pour la version existante déjà à jour d'août, exécutez uniquement `supabase/maj_20260825_consignation_bouteilles.sql` dans Supabase SQL Editor. Ce fichier a été complété pour ajouter les champs BV autonomes : réexécutez-le même si sa première version a déjà été appliquée.
+3. Ce script conserve les achats, retours, consignations et leurs anciennes liaisons financières ; il ajoute les champs nécessaires et complète les références BV historiques.
+4. Déployez ensuite cette version de l'application.
 
-### Administrateur principal
+N'exécutez pas `schema.sql` sur la base de production existante pour cette mise à jour : il contient des données initiales et des mises à jour historiques. Il est fourni comme référence d'installation initiale. Les migrations du 9 et du 13 août sont conservées pour référence ; ne les relancez pas si elles ont déjà été appliquées. Aucun script de nettoyage immédiat n'est inclus. N'utilisez pas la réinitialisation principale si vous souhaitez conserver les données.
 
-- Acces global
-- Peut creer/modifier les comptes
-- Peut creer des administrateurs secondaires
-- Peut verrouiller le stock initial apres configuration
-- Peut reinitialiser les donnees d'exploitation
+## Déployer sur Vercel
 
-### Administrateur secondaire
+- Connecter le dépôt GitHub à Vercel.
+- Framework : Vite.
+- Build command : `npm run build`.
+- Output directory : `dist`.
+- Installation : `npm install`.
 
-- Acces global inchange sur la gestion quotidienne
-- Peut charger, modifier, supprimer et saisir les donnees
-- Peut creer des comptes utilisateurs et administrateurs secondaires
-- Ne peut pas faire la reinitialisation principale
-- Ne peut pas promouvoir un compte en administrateur principal
-- Ne peut pas deverrouiller la constante de stock initial
-
-### Utilisateur simple
-
-- Consulte uniquement le site ou l'axe affecte
-- Peut encoder ses propres audits pour son site affecte
-- Consulte en lecture seule le suivi finance et le suivi capital
-- Telecharge les rapports disponibles pour son affectation
-- Ne modifie pas les donnees administratives
-
-## Logique des flux
-
-Le Stock Initial est une constante de reference. Il possede deux attributs :
-
-- `Q` : quantite
-- `V` : valeur
-
-Les achats produits `[Q, V]` declenchent :
-
-- Stock Emballages depot : `+ Q` et `+ V emballages`
-- Solde Brasimba usine : `- Q` et `- V emballages`
-- Objectif d'achats : `+ Q`
-- Total achats : `+ V produits`
-
-Les retours emballages `[Q, V]` declenchent :
-
-- Solde Brasimba usine : `+ Q` et `+ V emballages`
-- Stock Emballages depot : `- Q` et `- V emballages`
-
-Calcul central :
+Renseigner les variables dans Vercel, jamais dans les fichiers GitHub :
 
 ```text
-Stock Emballages Calcule = Stock Initial + Achats - Retours
+VITE_SUPABASE_URL
+VITE_SUPABASE_ANON_KEY
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
 ```
 
-Le module de controle compare ensuite :
-
-```text
-Stock Initial vs Stock Emballages Calcule
-```
-
-Un ecart signale une anomalie possible : perte, casse d'emballages, erreur de saisie ou incoherence dans le circuit depot / Brasimba.
-
-Le solde Brasimba du mois est calculé par Bremer :
-
-```text
-Solde = Stock initial usine + Retours du mois + Consignations du mois - Achats globaux du mois
-```
-
-Un solde positif signifie que Brasimba doit des emballages à Rivinter, un solde négatif que Rivinter doit à Brasimba, et un solde nul signale que les emballages disponibles aux dépôts doivent être retournés pour reconstituer une position favorable.
-
-Lorsque le filtre est global, le solde additionne tous les sites et axes et utilise le stock initial global usine. Lorsqu'un site ou axe est sélectionné, seuls son stock initial usine et ses mouvements du mois sont pris en compte.
-
-La gestion journalière est enregistrée avec le bouton `Enregistrer la situation journalière`. Un nouvel enregistrement pour une même date et un même site remplace les quantités précédentes.
-
-## Configuration du stock initial
-
-1. Ouvrez `Gestion de sites`.
-2. Verifiez ou saisissez les valeurs initiales `Q` et `V`.
-   Le total affiche est calcule automatiquement par somme des quantites saisies et somme des valeurs saisies.
-3. Le compte `principal_admin` clique sur `Verrouiller le stock initial`.
-
-Apres verrouillage, le stock initial reste immuable dans l'application. Une reinitialisation principale remet les stocks initiaux de reference et rouvre la configuration.
-
-## Mise a jour 2026-08-09
-
-Cette version ajoute :
-
-- le module `Gestion emballages depot`
-- le type d'emballage `Bac vide` a `4 500 Fc`
-- les paiements Brasimba dans le suivi finance
-- le solde Brasimba global en valeur sur le dashboard
-- les indicateurs visuels vert/rouge selon le solde global
-
-Pour une base Supabase deja existante, executez d'abord ce fichier dans `SQL Editor` :
-
-```text
-supabase/maj_20260809_modules.sql
-```
-
-Ensuite seulement, envoyez les nouveaux fichiers sur GitHub et redeployez Vercel.
-
-## Mise à jour 2026-08-13
-
-- gestion des bacs séparée des emballages et produits
-- calcul automatique des valeurs depuis les constantes Bremers
-- nouveau module de gestion journalière
-- contrôle stock initial moins situation journalière avec statuts Correct, Dette et Excédent
-- reporting global enrichi
-
-Pour une base existante, exécutez `supabase/maj_20260813_gestion_journaliere.sql` avant le redéploiement.
-
-## Deploiement Supabase
-
-1. Creez un projet sur Supabase.
-2. Ouvrez `SQL Editor`.
-3. Copiez tout le contenu de `supabase/schema.sql`.
-4. Executez le script.
-   Pour une mise a jour d'un projet existant, executez aussi ce meme script complet : il ajoute les nouvelles tables sans supprimer les donnees existantes.
-5. Dans Supabase, allez dans `Project Settings > API`.
-6. Notez :
-   - Project URL
-   - anon public key
-   - service_role key
-
-## Premier administrateur principal
-
-1. Deployez ou lancez l'application.
-2. Cliquez sur `Creer un compte initial`.
-3. Creez le premier compte avec votre email.
-4. Dans Supabase, ouvrez `SQL Editor`.
-5. Executez cette commande en remplacant l'email :
-
-```sql
-update public.profiles
-set role = 'principal_admin',
-    location_id = null,
-    active = true
-where email = 'votre-email@exemple.com';
-```
-
-6. Reconnectez-vous dans l'application.
-
-## Variables Vercel
-
-Dans Vercel, ajoutez ces variables dans `Project Settings > Environment Variables` :
-
-```text
-VITE_SUPABASE_URL=https://votre-projet.supabase.co
-VITE_SUPABASE_ANON_KEY=votre-cle-anon-publique
-SUPABASE_URL=https://votre-projet.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=votre-cle-service-role-privee
-```
-
-Important : `SUPABASE_SERVICE_ROLE_KEY` doit rester privee. Elle est utilisee seulement par la fonction serveur Vercel.
-
-## Deploiement GitHub + Vercel
-
-1. Creez un depot GitHub, par exemple `rivinter-emballages`.
-2. Envoyez tout le contenu de ce dossier dans le depot.
-   Les fichiers `index.html`, `main.js`, `styles.css`, `package.json` et `vercel.json` doivent etre directement a la racine du depot.
-3. Connectez-vous a Vercel.
-4. Cliquez sur `Add New Project`.
-5. Importez le depot GitHub.
-6. Framework detecte : `Vite`.
-7. Build command : `npm run build`.
-8. Output directory : `dist`.
-9. Ajoutez les variables d'environnement ci-dessus.
-10. Lancez le deploiement.
+Les deux URL désignent le même projet Supabase existant. La clé `SUPABASE_SERVICE_ROLE_KEY` reste strictement côté serveur et ne doit jamais avoir le préfixe `VITE_`. La création de comptes utilise `api/invite-user.js` : GitHub Pages seul ne suffit pas à héberger cette fonction serveur.
 
 ## Lancement local
 
-Creez un fichier `.env` a partir de `.env.example`, puis :
+Copier `.env.example` vers `.env`, renseigner les valeurs, puis :
 
-```bash
+```sh
 npm install
 npm run dev
 ```
 
-## Reinitialisation
+## Modules visibles
 
-La reinitialisation se trouve dans :
+- Dashboard
+- Gestion de sites : stock initial et objectifs mensuels en quantité
+- Achats produits
+- Retour emballages
+- Consignation : emballages et bouteilles avec numéro et montant BV
+- Reporting : objectifs, retours, bacs et écart du mois par site
+- Gestion comptes
 
-```text
-Gestion comptes > Reinitialisation principale
-```
+Les anciennes tables Finance, Capital, Audit et Gestion journalière sont conservées ; leurs modules ne sont plus proposés dans la navigation.
 
-Elle est visible uniquement pour `principal_admin`. Elle supprime toutes les donnees saisies :
+## Règles de consignation bouteilles
 
-- achats
-- retours emballages
-- consignations
-- audits
-- objectifs
-- suivi finance
-- saisies capital
-- parametres capital
-- stocks initiaux depot et usine
-- historique des actions
+| Type | Prix par bouteille | Bouteilles par casier |
+| --- | ---: | ---: |
+| 65Cl | 1 000 Fc | 12 |
+| 50Cl | 1 000 Fc | 20 |
+| 33Cl Noir | 500 Fc | 24 |
+| 33Cl Vert | 500 Fc | 24 |
+| 30Cl | 500 Fc | 24 |
 
-Elle conserve uniquement les donnees de base indispensables :
+Seuls les casiers complets sont acceptés. Chaque casier constitué consomme un bac du site et augmente son solde d'emballages Brasimba. La valeur calculée doit correspondre au montant du BV saisi.
 
-- comptes et roles
-- sites et axes
-- categories Bremers
-- produits
-- prix des produits
+## Vérification de cette livraison
 
-Apres reinitialisation, la configuration du stock initial est deverrouillee et vide. L'administrateur principal peut donc encoder un nouveau stock initial propre.
-
-### Si le bouton ne vide pas encore la base
-
-Si le site affiche encore des stocks ou des anciennes donnees apres le clic sur reinitialisation, c'est que la fonction Supabase en ligne n'a pas encore ete remplacee.
-
-Dans Supabase :
-
-1. Ouvrez `SQL Editor`.
-2. Copiez tout le contenu du fichier :
-
-```text
-supabase/reset_fonction_et_nettoyage.sql
-```
-
-3. Cliquez sur `Run`.
-4. Revenez dans l'application et actualisez la page avec `Ctrl + F5`.
-
-Ce script fait deux choses :
-
-- il remplace la fonction `reset_company_data`
-- il nettoie immediatement les anciennes saisies deja presentes dans la base
+Les fichiers JavaScript ont été vérifiés syntaxiquement. La compilation Vite et les tests connectés Supabase ne sont pas validés localement : l'installation existante des dépendances présente un problème d'accès. Vérifier le build Vercel, puis tester les saisies et les rapports sur une base de test avant de remplacer la version en production.
