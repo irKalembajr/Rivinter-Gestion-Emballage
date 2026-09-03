@@ -1,12 +1,13 @@
 {
   "name": "rivinter-emballages",
-  "version": "1.1.2",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

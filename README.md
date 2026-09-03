@@ -1,74 +1,51 @@
-# Rivinter — mise à jour du 2 septembre 2026
+# Rivinter — Suivi des emballages v2
 
-Application Vite / JavaScript, Supabase et fonction serveur Vercel.
+Application Vite en français, interface bleu nuit/or inspirée de Bouclage SRD, logique par site/axe et tableau signé par Bremer inspiré du classeur fourni. Sans configuration Supabase, elle démarre en démonstration avec des données entièrement fictives, perdues au rechargement.
 
-## Envoyer sur GitHub
+## Règles de calcul
 
-Décompressez l'archive et envoyez son contenu à la racine du dépôt GitHub. `package.json`, `index.html`, `main.js`, `styles.css` et `vercel.json` doivent être à la racine, avec les dossiers `api`, `public` et `supabase`.
+Le solde signé est une position comptable, pas le stock physique du dépôt. Négatif : Brasimba doit à Rivinter. Positif : Rivinter doit à Brasimba. Le parc comptable Brasimba est l'opposé de ce solde ; un parc négatif représente donc une dette, pas des emballages physiques négatifs.
 
-Ne publiez jamais de vrai fichier `.env` ni de clé privée. `.env.example` contient uniquement des exemples. Le fichier JavaScript actif est `main.js` à la racine. La copie ancienne du dossier `src` n'est pas incluse.
+| Mouvement | Dépôt | Solde signé |
+|---|---:|---:|
+| Achat | +quantité | +quantité |
+| Retour | −quantité | −quantité |
+| Nouvelle consignation emballages | −quantité | −quantité |
+| Consignation bouteilles | −1 BAC par casier constitué | −casiers constitués |
+| Perte / vol au dépôt | −quantité | inchangé |
+| Casse chez Brasimba | inchangé | +quantité |
 
-## Mise à jour de la base existante
+La perte au dépôt ne modifie pas la créance sur Brasimba : elle modifie le stock et les indicateurs de pertes. Une casse chez Brasimba dégrade en revanche cette créance. Les soldes peuvent traverser zéro. Les emballages pleins et vides sont comptés ensemble ; aucune estimation de leur répartition n'est inventée.
 
-1. Sauvegardez la base Supabase avant toute migration.
-2. Pour la version existante déjà à jour d'août, exécutez uniquement `supabase/maj_20260825_consignation_bouteilles.sql` dans Supabase SQL Editor. Ce fichier a été complété pour ajouter les champs BV autonomes : réexécutez-le même si sa première version a déjà été appliquée.
-3. Ce script conserve les achats, retours, consignations et leurs anciennes liaisons financières ; il ajoute les champs nécessaires et complète les références BV historiques.
-4. Déployez ensuite cette version de l'application.
+Bouteilles : 65 cl = 12 × 1 000 Fc ; 50 cl = 20 × 1 000 Fc ; 33 cl noir/vert et 30 cl = 24 × 500 Fc. Les casiers incomplets sont refusés. Le BV doit correspondre exactement au total des lignes consignées, éventuellement mixtes. Valorisation emballages : 16 500 Fc sauf ALE50 à 24 500 Fc et BAC à 4 500 Fc. Le reporting sépare les BAC des casiers pour éviter les doubles comptes.
 
-N'exécutez pas `schema.sql` sur la base de production existante pour cette mise à jour : il contient des données initiales et des mises à jour historiques. Il est fourni comme référence d'installation initiale. Les migrations du 9 et du 13 août sont conservées pour référence ; ne les relancez pas si elles ont déjà été appliquées. Aucun script de nettoyage immédiat n'est inclus. N'utilisez pas la réinitialisation principale si vous souhaitez conserver les données.
+Écart de période = achats − retours sur la même période, indépendamment du solde cumulé et des consignations. Les objectifs sont en quantité seulement. Les soldes sont calculés jusqu'à la date de fin, avec les reports et tous les mouvements antérieurs. Chaque site/axe reste indépendant ; les tableaux globaux consolident les périmètres autorisés.
 
-## Déployer sur Vercel
+## Installation et GitHub / Vercel
 
-- Connecter le dépôt GitHub à Vercel.
-- Framework : Vite.
-- Build command : `npm run build`.
-- Output directory : `dist`.
-- Installation : `npm install`.
+1. Déposer le contenu de ce dossier dans un dépôt GitHub, sans node_modules, dist ni secrets.
+2. Installer Node.js 20+ et pnpm, puis `pnpm install`, `pnpm test`, `pnpm dev`.
+3. `pnpm build` produit dist. Vercel : commande de build `pnpm build`, sortie `dist`, fonction `/api/invite-user` incluse.
+4. Pour connecter la base, copier `.env.example` vers `.env.local` et renseigner les variables. Ne jamais préfixer la clé service-role par VITE_ ni la livrer au navigateur. La clé service-role reste exclusivement dans l'environnement serveur Vercel.
 
-Renseigner les variables dans Vercel, jamais dans les fichiers GitHub :
+La démonstration statique Sites ne contient aucune clé et ne gère pas d'invitations réelles. La gestion réelle des comptes requiert Supabase et la fonction serveur Vercel. Les contrôles de rôle serveur restent obligatoires même si un bouton est masqué dans l'interface.
 
-```text
-VITE_SUPABASE_URL
-VITE_SUPABASE_ANON_KEY
-SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
-```
+## Migration prudente de la base existante
 
-Les deux URL désignent le même projet Supabase existant. La clé `SUPABASE_SERVICE_ROLE_KEY` reste strictement côté serveur et ne doit jamais avoir le préfixe `VITE_`. La création de comptes utilise `api/invite-user.js` : GitHub Pages seul ne suffit pas à héberger cette fonction serveur.
+Cette livraison cible la base de l'ancienne application, pas une base vide. Elle suppose ses tables locations, bremers, products, product_prices, profiles, initial_stocks, global_factory_initial, objectives, purchases, packaging_returns et ses fonctions de droits existantes. PostgreSQL 15+ est requis pour la vue security_invoker.
 
-## Lancement local
+1. Sauvegarder la base et créer une copie de test.
+2. Vérifier les six identifiants Bremer : B65, B33N, B33V, B30CL, ALE50, BAC.
+3. Faire examiner puis appliquer `supabase/20260903_rivinter_v2.sql` sur la copie. C'est une migration additive ; ne pas réexécuter un ancien script de réinitialisation.
+4. Comparer les soldes site par site avec la version précédente et les pièces validées. Tester les rôles, un achat, un retour, les deux consignations, une casse et une annulation.
+5. Après validation et sauvegarde, planifier la bascule et retirer l'ancienne interface de saisie. Ses anciennes écritures ne bénéficient pas des contrôles transactionnels v2.
 
-Copier `.env.example` vers `.env`, renseigner les valeurs, puis :
+Les anciennes consignations conservent leurs effets d'origine (sans nouvelle déduction rétroactive du dépôt). Les nouvelles consignations appliquent la règle demandée. Les reports Brasimba historiques sont inversés pour obtenir la convention de signe Excel. Un report global non réparti reste présenté séparément, sans allocation arbitraire aux sites. Le stock initial d'un site avec mouvements ne peut plus être réécrit par cette interface.
 
-```sh
-npm install
-npm run dev
-```
+Les anciens modules finance restent dans la base mais ne sont plus chargés ni exposés. Le fichier Excel n'est pas importé automatiquement : son nom SEPT et sa période interne d'août 2026 ainsi que les anomalies de formules nécessitent une validation métier avant reprise. La photo est une référence de présentation, pas une source de soldes réels.
 
-## Modules visibles
+## Contrôles et limites de validation
 
-- Dashboard
-- Gestion de sites : stock initial et objectifs mensuels en quantité
-- Achats produits
-- Retour emballages
-- Consignation : emballages et bouteilles avec numéro et montant BV
-- Reporting : objectifs, retours, bacs et écart du mois par site
-- Gestion comptes
+Les écritures v2 passent par des fonctions SQL transactionnelles : contrôle des droits, quantités entières, prix recalculés côté serveur, BV exact, référence active unique, anti-double-envoi, contrôle de stock incluant les dates ultérieures. Une annulation reste tracée avec son motif ; elle ne supprime pas l'historique.
 
-Les anciennes tables Finance, Capital, Audit et Gestion journalière sont conservées ; leurs modules ne sont plus proposés dans la navigation.
-
-## Règles de consignation bouteilles
-
-| Type | Prix par bouteille | Bouteilles par casier |
-| --- | ---: | ---: |
-| 65Cl | 1 000 Fc | 12 |
-| 50Cl | 1 000 Fc | 20 |
-| 33Cl Noir | 500 Fc | 24 |
-| 33Cl Vert | 500 Fc | 24 |
-| 30Cl | 500 Fc | 24 |
-
-Seuls les casiers complets sont acceptés. Chaque casier constitué consomme un bac du site et augmente son solde d'emballages Brasimba. La valeur calculée doit correspondre au montant du BV saisi.
-
-## Vérification de cette livraison
-
-Les fichiers JavaScript ont été vérifiés syntaxiquement. La compilation Vite et les tests connectés Supabase ne sont pas validés localement : l'installation existante des dépendances présente un problème d'accès. Vérifier le build Vercel, puis tester les saisies et les rapports sur une base de test avant de remplacer la version en production.
+16 tests unitaires du moteur passent et la compilation de production passe. La migration SQL n'a pas été exécutée sur une base de test ou de production ; sa validation PostgreSQL et les tests des politiques RLS restent indispensables avant utilisation réelle. Aucun test visuel/interactif navigateur complet n'a été effectué. Les outils WebMCP sont facultatifs et leur validation dans un contexte compatible n'a pas été effectuée. Aucune donnée réelle n'a été modifiée.
